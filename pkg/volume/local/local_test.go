@@ -398,7 +398,7 @@ func TestMapUnmap(t *testing.T) {
 	}
 }
 
-func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, fsGroup int64) error {
+func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, mounterArgs.FsGroup int64) error {
 	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		return err
@@ -413,7 +413,7 @@ func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, fsGr
 		return fmt.Errorf("Got unexpected path: %s", path)
 	}
 
-	if err := mounter.SetUp(&fsGroup); err != nil {
+	if err := mounter.SetUp(&mounterArgs.FsGroup); err != nil {
 		return err
 	}
 	return nil

@@ -91,11 +91,11 @@ func (c *csiMountMgr) CanMount() error {
 	return nil
 }
 
-func (c *csiMountMgr) SetUp(fsGroup *int64) error {
-	return c.SetUpAt(c.GetPath(), fsGroup)
+func (c *csiMountMgr) SetUp(mounterArgs volume.MounterArgs) error {
+	return c.SetUpAt(c.GetPath(), mounterArgs)
 }
 
-func (c *csiMountMgr) SetUpAt(dir string, fsGroup *int64) error {
+func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	klog.V(4).Infof(log("Mounter.SetUpAt(%s)", dir))
 
 	mounted, err := isDirMounted(c.plugin, dir)
@@ -277,6 +277,7 @@ func (c *csiMountMgr) GetAttributes() volume.Attributes {
 		ReadOnly:        c.readOnly,
 		Managed:         !c.readOnly,
 		SupportsSELinux: supportSelinux,
+		SupportsQuota:   false,
 	}
 }
 

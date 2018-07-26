@@ -42,7 +42,7 @@ func TestSetUpAt(t *testing.T) {
 	plugin, rootDir := testPlugin()
 	plugin.unsupportedCommands = []string{"unsupportedCmd"}
 	plugin.runner = fakeRunner(
-		// first call without fsGroup
+		// first call without mounterArgs.FsGroup
 		assertDriverCall(t, successOutput(), mountCmd, rootDir+"/mount-dir",
 			specJson(plugin, spec, map[string]string{
 				optionKeyPodName:            "my-pod",
@@ -51,7 +51,7 @@ func TestSetUpAt(t *testing.T) {
 				optionKeyServiceAccountName: "my-sa",
 			})),
 
-		// second test has fsGroup
+		// second test has mounterArgs.FsGroup
 		assertDriverCall(t, notSupportedOutput(), mountCmd, rootDir+"/mount-dir",
 			specJson(plugin, spec, map[string]string{
 				optionFSGroup:               "42",
@@ -67,6 +67,6 @@ func TestSetUpAt(t *testing.T) {
 	m, _ := plugin.newMounterInternal(spec, pod, mounter, plugin.runner)
 	m.SetUpAt(rootDir+"/mount-dir", nil)
 
-	fsGroup := int64(42)
-	m.SetUpAt(rootDir+"/mount-dir", &fsGroup)
+	mounterArgs.FsGroup := int64(42)
+	m.SetUpAt(rootDir+"/mount-dir", &mounterArgs)
 }

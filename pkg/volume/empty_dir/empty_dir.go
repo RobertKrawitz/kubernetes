@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/kubernetes/pkg/util/quota"
 	stringsutil "k8s.io/kubernetes/pkg/util/strings"
 	"k8s.io/kubernetes/pkg/volume"
 	volumeutil "k8s.io/kubernetes/pkg/volume/util"
@@ -170,14 +171,19 @@ type emptyDir struct {
 	mounter       mount.Interface
 	mountDetector mountDetector
 	plugin        *emptyDirPlugin
+	desiredSize   int64
+	quotaID       int64
 	volume.MetricsProvider
 }
 
 func (ed *emptyDir) GetAttributes() volume.Attributes {
+	hasQuotas, _ := quota.SupportsQuotas(ed.mounter, ed.GetPath())
+	glog.V(3).Infof("GetAttributes volume %s supports quotas %v", ed.GetPath(), hasQuotas)
 	return volume.Attributes{
 		ReadOnly:        false,
 		Managed:         true,
 		SupportsSELinux: true,
+		SupportsQuota:   hasQuotas,
 	}
 }
 
@@ -189,12 +195,13 @@ func (b *emptyDir) CanMount() error {
 }
 
 // SetUp creates new directory.
-func (ed *emptyDir) SetUp(fsGroup *int64) error {
-	return ed.SetUpAt(ed.GetPath(), fsGroup)
+func (ed *emptyDir) SetUp(mounterArgs volume.MounterArgs) error {
+	glog.V(3).Infof("##### Emptydir Setup %#+v Size %v", ed, mounterArgs.DesiredSize)
+	return ed.SetUpAt(ed.GetPath(), mounterArgs)
 }
 
 // SetUpAt creates new directory.
-func (ed *emptyDir) SetUpAt(dir string, fsGroup *int64) error {
+func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	notMnt, err := ed.mounter.IsLikelyNotMountPoint(dir)
 	// Getting an os.IsNotExist err from is a contingency; the directory
 	// may not exist yet, in which case, setup should run.
@@ -225,10 +232,21 @@ func (ed *emptyDir) SetUpAt(dir string, fsGroup *int64) error {
 		err = fmt.Errorf("unknown storage medium %q", ed.medium)
 	}
 
-	volume.SetVolumeOwnership(ed, fsGroup)
+	volume.SetVolumeOwnership(ed, mounterArgs.FsGroup)
 
 	if err == nil {
 		volumeutil.SetReady(ed.getMetaDir())
+	}
+	if mounterArgs.DesiredSize > 0 {
+		glog.V(3).Infof("@@@@@@@@@@ Setting up bogus quota %v for %s based on desired size %v", dir, mounterArgs.DesiredSize / 2, mounterArgs.DesiredSize)
+		hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir)
+		if hasQuotas {
+			// We will need this at some point...
+			_, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.DesiredSize / 2)
+			if err != nil {
+				glog.V(3).Infof("Set quota failed %v", err)
+			}
+		}
 	}
 
 	return err
@@ -352,7 +370,6 @@ func (ed *emptyDir) setupDir(dir string) error {
 			glog.Errorf("Expected directory %q permissions to be: %s; got: %s", dir, perm.Perm(), fileinfo.Mode().Perm())
 		}
 	}
-
 	return nil
 }
 
@@ -393,9 +410,14 @@ func (ed *emptyDir) TearDownAt(dir string) error {
 }
 
 func (ed *emptyDir) teardownDefault(dir string) error {
+	// Remove any quota
+	err := quota.ClearQuota(ed.mounter, dir)
+	if err != nil {
+		glog.V(3).Infof("Failed to clear quota on %s: %v", dir, err)
+	}
 	// Renaming the directory is not required anymore because the operation executor
 	// now handles duplicate operations on the same volume
-	err := os.RemoveAll(dir)
+	err = os.RemoveAll(dir)
 	if err != nil {
 		return err
 	}

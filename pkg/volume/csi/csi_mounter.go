@@ -88,11 +88,11 @@ func (c *csiMountMgr) CanMount() error {
 	return nil
 }
 
-func (c *csiMountMgr) SetUp(fsGroup *int64) error {
-	return c.SetUpAt(c.GetPath(), fsGroup)
+func (c *csiMountMgr) SetUp(mounterArgs volume.MounterArgs) error {
+	return c.SetUpAt(c.GetPath(), mounterArgs)
 }
 
-func (c *csiMountMgr) SetUpAt(dir string, fsGroup *int64) error {
+func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	glog.V(4).Infof(log("Mounter.SetUpAt(%s)", dir))
 
 	mounted, err := isDirMounted(c.plugin, dir)
@@ -197,8 +197,8 @@ func (c *csiMountMgr) SetUpAt(dir string, fsGroup *int64) error {
 	}
 
 	// apply volume ownership
-	if !c.readOnly && fsGroup != nil {
-		err := volume.SetVolumeOwnership(c, fsGroup)
+	if !c.readOnly && mounterArgs.FsGroup != nil {
+		err := volume.SetVolumeOwnership(c, mounterArgs.FsGroup)
 		if err != nil {
 			// attempt to rollback mount.
 			glog.Error(log("mounter.SetupAt failed to set fsgroup volume ownership for [%s]: %v", c.volumeID, err))
@@ -221,7 +221,7 @@ func (c *csiMountMgr) SetUpAt(dir string, fsGroup *int64) error {
 
 			return err
 		}
-		glog.V(4).Info(log("mounter.SetupAt sets fsGroup to [%d] for %s", *fsGroup, c.volumeID))
+		glog.V(4).Info(log("mounter.SetupAt sets fsGroup to [%d] for %s", mounterArgs.FsGroup, c.volumeID))
 	}
 
 	glog.V(4).Infof(log("mounter.SetUp successfully requested NodePublish [%s]", dir))
@@ -241,6 +241,7 @@ func (c *csiMountMgr) GetAttributes() volume.Attributes {
 		ReadOnly:        c.readOnly,
 		Managed:         !c.readOnly,
 		SupportsSELinux: supportSelinux,
+		SupportsQuota:   false,
 	}
 }
 

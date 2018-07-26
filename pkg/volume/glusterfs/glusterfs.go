@@ -223,6 +223,7 @@ func (b *glusterfsMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        b.readOnly,
 		Managed:         false,
 		SupportsSELinux: false,
+		SupportsQuota:   false,
 	}
 }
 
@@ -241,11 +242,11 @@ func (b *glusterfsMounter) CanMount() error {
 }
 
 // SetUp attaches the disk and bind mounts to the volume path.
-func (b *glusterfsMounter) SetUp(fsGroup *int64) error {
-	return b.SetUpAt(b.GetPath(), fsGroup)
+func (b *glusterfsMounter) SetUp(mounterArgs volume.MounterArgs) error {
+	return b.SetUpAt(b.GetPath(), mounterArgs)
 }
 
-func (b *glusterfsMounter) SetUpAt(dir string, fsGroup *int64) error {
+func (b *glusterfsMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	notMnt, err := b.mounter.IsLikelyNotMountPoint(dir)
 	glog.V(4).Infof("mount setup: %s %v %v", dir, !notMnt, err)
 	if err != nil && !os.IsNotExist(err) {

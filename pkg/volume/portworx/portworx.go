@@ -273,6 +273,7 @@ func (b *portworxVolumeMounter) GetAttributes() volume.Attributes {
 		Managed:  !b.readOnly,
 		// true ?
 		SupportsSELinux: true,
+		SupportsQuota:   false,
 	}
 }
 
@@ -284,12 +285,12 @@ func (b *portworxVolumeMounter) CanMount() error {
 }
 
 // SetUp attaches the disk and bind mounts to the volume path.
-func (b *portworxVolumeMounter) SetUp(fsGroup *int64) error {
-	return b.SetUpAt(b.GetPath(), fsGroup)
+func (b *portworxVolumeMounter) SetUp(mounterArgs volume.MounterArgs) error {
+	return b.SetUpAt(b.GetPath(), mounterArgs)
 }
 
 // SetUpAt attaches the disk and bind mounts to the volume path.
-func (b *portworxVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
+func (b *portworxVolumeMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	notMnt, err := b.mounter.IsLikelyNotMountPoint(dir)
 	glog.Infof("Portworx Volume set up. Dir: %s %v %v", dir, !notMnt, err)
 	if err != nil && !os.IsNotExist(err) {
@@ -317,7 +318,7 @@ func (b *portworxVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
 		return err
 	}
 	if !b.readOnly {
-		volume.SetVolumeOwnership(b, fsGroup)
+		volume.SetVolumeOwnership(b, mounterArgs.FsGroup)
 	}
 	glog.Infof("Portworx Volume %s setup at %s", b.volumeID, dir)
 	return nil

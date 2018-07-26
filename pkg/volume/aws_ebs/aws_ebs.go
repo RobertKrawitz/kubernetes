@@ -353,6 +353,7 @@ func (b *awsElasticBlockStoreMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        b.readOnly,
 		Managed:         !b.readOnly,
 		SupportsSELinux: true,
+		SupportsQuota:   false,
 	}
 }
 
@@ -364,12 +365,12 @@ func (b *awsElasticBlockStoreMounter) CanMount() error {
 }
 
 // SetUp attaches the disk and bind mounts to the volume path.
-func (b *awsElasticBlockStoreMounter) SetUp(fsGroup *int64) error {
-	return b.SetUpAt(b.GetPath(), fsGroup)
+func (b *awsElasticBlockStoreMounter) SetUp(mounterArgs volume.MounterArgs) error {
+	return b.SetUpAt(b.GetPath(), mounterArgs)
 }
 
 // SetUpAt attaches the disk and bind mounts to the volume path.
-func (b *awsElasticBlockStoreMounter) SetUpAt(dir string, fsGroup *int64) error {
+func (b *awsElasticBlockStoreMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	// TODO: handle failed mounts here.
 	notMnt, err := b.mounter.IsLikelyNotMountPoint(dir)
 	glog.V(4).Infof("PersistentDisk set up: %s %v %v", dir, !notMnt, err)
@@ -421,7 +422,7 @@ func (b *awsElasticBlockStoreMounter) SetUpAt(dir string, fsGroup *int64) error 
 	}
 
 	if !b.readOnly {
-		volume.SetVolumeOwnership(b, fsGroup)
+		volume.SetVolumeOwnership(b, mounterArgs.FsGroup)
 	}
 
 	glog.V(4).Infof("Successfully mounted %s", dir)

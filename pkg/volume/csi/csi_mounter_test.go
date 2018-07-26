@@ -140,8 +140,8 @@ func TestMounterSetUp(t *testing.T) {
 	}
 
 	// Mounter.SetUp()
-	fsGroup := int64(2000)
-	if err := csiMounter.SetUp(&fsGroup); err != nil {
+	mounterArgs.FsGroup := int64(2000)
+	if err := csiMounter.SetUp(&mounterArgs.FsGroup); err != nil {
 		t.Fatalf("mounter.Setup failed: %v", err)
 	}
 

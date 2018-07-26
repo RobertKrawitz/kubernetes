@@ -29,6 +29,8 @@ import (
 	"k8s.io/kubernetes/pkg/volume/util"
 	"k8s.io/kubernetes/pkg/volume/util/operationexecutor"
 	"k8s.io/kubernetes/pkg/volume/util/types"
+	apiv1resource "k8s.io/kubernetes/pkg/api/v1/resource"
+	limits "k8s.io/kubernetes/pkg/kubelet/eviction"
 )
 
 // DesiredStateOfWorld defines a set of thread-safe operations for the kubelet
@@ -156,6 +158,10 @@ type volumeToMount struct {
 	// reportedInUse indicates that the volume was successfully added to the
 	// VolumesInUse field in the node's status.
 	reportedInUse bool
+
+	// desiredSizeLimit indicates the desired upper bound on the size of the volume
+	// (if so implemented)
+	desiredSizeLimit int64
 }
 
 // The pod object represents a pod that references the underlying volume and
@@ -221,12 +227,21 @@ func (dsw *desiredStateOfWorld) AddPodToVolume(
 	}
 
 	if _, volumeExists := dsw.volumesToMount[volumeName]; !volumeExists {
+		var sizeLimit int64
+		sizeLimit = 0
+		isLocal, _ := limits.IsLocalEphemeralVolume(pod, volumeSpec.Name())
+		if isLocal {
+			_, podLimits := apiv1resource.PodRequestsAndLimits(pod)
+			ephemeralStorageLimit := podLimits[v1.ResourceEphemeralStorage]
+			sizeLimit = ephemeralStorageLimit.Value()
+		}
 		dsw.volumesToMount[volumeName] = volumeToMount{
 			volumeName:         volumeName,
 			podsToMount:        make(map[types.UniquePodName]podToMount),
 			pluginIsAttachable: attachable,
 			volumeGidValue:     volumeGidValue,
 			reportedInUse:      false,
+			desiredSizeLimit:   sizeLimit,
 		}
 	}
 
@@ -353,7 +368,8 @@ func (dsw *desiredStateOfWorld) GetVolumesToMount() []VolumeToMount {
 						PluginIsAttachable:  volumeObj.pluginIsAttachable,
 						OuterVolumeSpecName: podObj.outerVolumeSpecName,
 						VolumeGidValue:      volumeObj.volumeGidValue,
-						ReportedInUse:       volumeObj.reportedInUse}})
+						ReportedInUse:       volumeObj.reportedInUse,
+						DesiredSizeLimit:    volumeObj.desiredSizeLimit}})
 		}
 	}
 	return volumesToMount

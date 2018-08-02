@@ -172,7 +172,7 @@ type emptyDir struct {
 	mountDetector mountDetector
 	plugin        *emptyDirPlugin
 	desiredSize   int64
-	quotaID       int64
+	quotaID       quota.QuotaID
 	volume.MetricsProvider
 }
 
@@ -242,11 +242,14 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 		hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir)
 		if hasQuotas {
 			// We will need this at some point...
-			_, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, mounterArgs.DesiredSize / 2)
+			quotaID, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, mounterArgs.DesiredSize / 2)
 			if err != nil {
 				glog.V(3).Infof("Set quota failed %v", err)
+			} else {
+				ed.quotaID = quotaID
 			}
 		}
+		glog.V(3).Infof("SETUP ed %#+v", ed)
 	}
 
 	return err
@@ -411,7 +414,8 @@ func (ed *emptyDir) TearDownAt(dir string) error {
 
 func (ed *emptyDir) teardownDefault(dir string) error {
 	// Remove any quota
-	err := quota.ClearQuota(ed.mounter, dir)
+	glog.V(3).Infof("TEARDOWN ed %#+v", ed)
+	err := quota.ClearQuota(dir)
 	if err != nil {
 		glog.V(3).Infof("Failed to clear quota on %s: %v", dir, err)
 	}

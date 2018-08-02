@@ -26,6 +26,8 @@ import (
 	"strings"
 	"golang.org/x/sys/unix"
 	"sync"
+	"regexp"
+	"strconv"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/util/mount"
@@ -42,6 +44,8 @@ var quotaPodMap    = make(map[QuotaID]string)
 var dirPodMap      = make(map[string]string)
 // Pod -> refcount
 var podDirCountMap = make(map[string]int)
+// ID -> size
+var quotaSizeMap   = make(map[QuotaID]int64)
 var quotaLock sync.RWMutex
 
 // Directory -> mountpoint
@@ -59,46 +63,46 @@ var quotaCmds = []string{"/sbin/xfs_quota",
 	"/usr/sbin/xfs_quota",
 	"/bin/xfs_quota"}
 
+var quotaParseRegexp *regexp.Regexp = regexp.MustCompile("^[^ \t]*[ \t]*([123456789][0123456789]*)")
+
 const (
 	linuxXfsMagic = 0x58465342
 	// XXXXXXX Need a better way of doing this...
 	firstQuota QuotaID = 1048577
 )
 
-func detectMountpoint(m mount.Interface, path string) (string, error) {
+func detectMountpoint(m mount.Interface, path string) (error) {
 	xpath, err := filepath.Abs(path)
 	if err != nil {
-		return "/", err
+		return err
 	}
 	xpath, err = filepath.EvalSymlinks(xpath)
 	if err != nil {
-		return "/", err
+		return err
 	}
 	for xpath != "" {
 		isNotMount, err := m.IsNotMountPoint(xpath)
 		if err != nil {
-			return "/", err
+			return err
 		}
 		if !isNotMount {
 			glog.V(3).Infof("getMountpoint %s found! %s", path, xpath)
 			mountpointsMap[path] = xpath
-			return xpath, nil
+			return nil
 		}
 		xpath = filepath.Dir(xpath)
 	}
-	return "/", nil
+	return nil
 }	
 
 // getMountpoint returns the mount point for the specified path
-func getMountpoint(m mount.Interface, path string) (string, error) {
+func getMountpoint(path string) (string, error) {
 	mountpointLock.Lock()
 	defer mountpointLock.Unlock()
 	if mountpoint, ok := mountpointsMap[path]; ok {
 		return mountpoint, nil
 	}
-	mountpoint, err := detectMountpoint(m, path)
-	mountpointsMap[path] = mountpoint
-	return mountpoint, err
+	return "/", fmt.Errorf("Mount point not found for %s", path);
 }
 
 func getXFSQuotaCmd() (string, error) {
@@ -121,12 +125,12 @@ func getXFSQuotaCmd() (string, error) {
 	return "", fmt.Errorf("No xfs_quota program found")
 }
 
-func runXFSQuotaCommand(m mount.Interface, path string, command string) (*exec.Cmd, error) {
+func runXFSQuotaCommand(path string, command string) (*exec.Cmd, error) {
 	quotaCmd, err := getXFSQuotaCmd()
 	if err != nil {
 		return nil, err
 	}
-	mountpoint, err := getMountpoint(m, path)
+	mountpoint, err := getMountpoint(path)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +140,7 @@ func runXFSQuotaCommand(m mount.Interface, path string, command string) (*exec.C
 	return cmd, nil
 }
 
-func detectSupportsQuotas(m mount.Interface, path string) (bool, error) {
+func detectSupportsQuotas(path string) (bool, error) {
 	// For now, we're only going to do quotas on XFS
 	glog.V(3).Infof("detectSupportQuota %s", path)
 	buf := unix.Statfs_t{}
@@ -146,7 +150,7 @@ func detectSupportsQuotas(m mount.Interface, path string) (bool, error) {
 	if (buf.Type != linuxXfsMagic) {
 		return false, fmt.Errorf("runXFSQuotaCommand: %s not on XFS filesystem", path)
 	}
-	out, err := runXFSQuotaCommand(m, path, "print")
+	out, err := runXFSQuotaCommand(path, "print")
 	if err != nil {
 		glog.V(3).Infof("runXFSQuotaCommand failed %v", err)
 		return false, err
@@ -169,7 +173,8 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 	if quotas, ok := supportsQuotasMap[path]; ok {
 		return quotas, nil
 	}
-	quotas, err := detectSupportsQuotas(m, path)
+	detectMountpoint(m, path)
+	quotas, err := detectSupportsQuotas(path)
 	if err != nil {
 		glog.V(3).Infof("SupportsQuotas failed %v", err)
 	}
@@ -177,9 +182,9 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 	return quotas, err
 }
 
-func setQuotaOn(m mount.Interface, path string, id QuotaID, bytes int64) error {
+func setQuotaOn(path string, id QuotaID, bytes int64) error {
 	glog.V(3).Infof("setQuotaOn %s ID %v bytes %v", path, id, bytes)
-	cmd, err := runXFSQuotaCommand(m, path, fmt.Sprintf("limit -p bhard=%v %v", bytes, id))
+	cmd, err := runXFSQuotaCommand(path, fmt.Sprintf("limit -p bhard=%v %v", bytes, id))
 	if err != nil {
 		return err
 	}
@@ -187,7 +192,7 @@ func setQuotaOn(m mount.Interface, path string, id QuotaID, bytes int64) error {
 	if err != nil {
 		return err
 	}
-	cmd, err = runXFSQuotaCommand(m, path, fmt.Sprintf("project -s -p %s %v", path, id))
+	cmd, err = runXFSQuotaCommand(path, fmt.Sprintf("project -s -p %s %v", path, id))
 	if err != nil {
 		return err
 	}
@@ -196,34 +201,46 @@ func setQuotaOn(m mount.Interface, path string, id QuotaID, bytes int64) error {
 }
 
 func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (QuotaID, error) {
+	err := detectMountpoint(m, path)
+	if err != nil {
+		return BadQuota, fmt.Errorf("Cannot detect mountpoint for %s: %v", path, err)
+	}
 	ok, err := SupportsQuotas(m, path)
 	if !ok {
-		return 0, fmt.Errorf("Quotas not supported on %s: %v", path, err)
+		return BadQuota, fmt.Errorf("Quotas not supported on %s: %v", path, err)
 	}
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
-	_, ok = dirPodMap[path]
+	pod, ok := dirPodMap[path]
 	if ok {
-		return 0, fmt.Errorf("Quota already assigned to dir %s", path);
+		if pod != poduid {
+			return BadQuota, fmt.Errorf("Requesting quota on existing directory %s but different pod %s %s", path, pod, poduid)
+		}
 	}
 	id, ok := podQuotaMap[poduid]
 	if ok {
-		err = setQuotaOn(m, path, id, bytes)
+		if quotaSizeMap[id] != bytes {
+			return BadQuota, fmt.Errorf("Requesting quota of different size: old %v new %v", quotaSizeMap[id], bytes)
+		}
+		err = setQuotaOn(path, id, bytes)
 		if err != nil {
-			return 0, err
+			return BadQuota, err
 		} else {
+			dirQuotaMap[path]   = id
+			dirPodMap[path]     = poduid
 			return id, nil
 		}
 	}
 	for id := firstQuota; id == id; id++ {
 		_, ok := quotaPodMap[id]
 		if ! ok {
-			err := setQuotaOn(m, path, id, bytes)
+			err := setQuotaOn(path, id, bytes)
 			if err != nil {
 				glog.V(3).Infof("Assign quota FAILED %v", err)
 				return QuotaID(0), err
 			}
 			quotaPodMap[id]     = poduid
+			quotaSizeMap[id]    = bytes
 			podQuotaMap[poduid] = id
 			dirQuotaMap[path]   = id
 			dirPodMap[path]     = poduid
@@ -238,41 +255,53 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (Qu
 	return QuotaID(0), fmt.Errorf("Unable to find a quota ID for %s", path)
 }
 
-func GetQuotaID(m mount.Interface, path string) (QuotaID, error) {
+func GetQuotaID(path string) (QuotaID, error) {
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
 	id, ok := dirQuotaMap[path]
 	if !ok {
-		return 0, fmt.Errorf("No quota available for %s", path);
+		return BadQuota, fmt.Errorf("No quota available for %s", path);
 	} else {
 		return id, nil
 	}
 }
 
-func GetConsumption(m mount.Interface, path string) (int64, error) {
+func internalGetConsumption(path string) (int64, error) {
+	id, ok := dirQuotaMap[path]
+	if !ok {
+		return 0, fmt.Errorf("No quota available for %s", path);
+	}
+	out, err := runXFSQuotaCommand(path, fmt.Sprintf("quota -N -p %v -b -n", id))
+	if err != nil {
+		return 0, err
+	}
+	data, err := out.Output()
+	if err != nil {
+		return 0, err
+	}
+	match := quotaParseRegexp.FindStringSubmatch(string(data))
+	if match == nil {
+		return 0, fmt.Errorf("Unable to parse quota output")
+	}
+	size, err := strconv.ParseInt(match[1], 10, 64)
+	if match == nil {
+		return 0, fmt.Errorf("Unable to parse quota output")
+	}
+	return size, nil
+}	
+
+func GetConsumption(path string) (int64, error) {
 	// Note that we actually need to hold the lock at least through
 	// running the quota command, so it can't get recycled behind our back
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
-	_, ok := dirQuotaMap[path]
-	if !ok {
-		return 0, fmt.Errorf("No quota available for %s", path);
-	}
-	ok, err := SupportsQuotas(m, path)
-	if !ok {
-		return 0, fmt.Errorf("Quotas not supported on %s: %v", path, err)
-	}
-	_, err = runXFSQuotaCommand(m, path, "quota -N -p 1 -b -n")
-	if err != nil {
-		return 0, err
-	}
-	// DO THE REAL WORK
-	return 0, fmt.Errorf("not implemented")
+	size, error := internalGetConsumption(path)
+	return size, error
 }
 
-func doClearQuota(m mount.Interface, path string, clearQuota bool) (error) {
+func doClearQuota(path string, clearQuota bool) (error) {
 	// Disassociate the directory from the quota
-	cmd, err := runXFSQuotaCommand(m, path, fmt.Sprintf("project -C -p %s %v", path, dirQuotaMap[path]))
+	cmd, err := runXFSQuotaCommand(path, fmt.Sprintf("project -C -p %s %v", path, dirQuotaMap[path]))
 	err = cmd.Run()
 	if err != nil {
 		glog.V(3).Infof("Unable to disassociate quota %v %s: %v", dirQuotaMap[path], path, err)
@@ -281,7 +310,7 @@ func doClearQuota(m mount.Interface, path string, clearQuota bool) (error) {
 
 	// If the refcount is going to go to zero, clear the quota
 	if clearQuota {
-		cmd, err := runXFSQuotaCommand(m, path, fmt.Sprintf("limit -p bhard=0 %v", dirQuotaMap[path]))
+		cmd, err := runXFSQuotaCommand(path, fmt.Sprintf("limit -p bhard=0 %v", dirQuotaMap[path]))
 		err = cmd.Run()
 		if err != nil {
 			glog.V(3).Infof("Unable to clear quota %v %s: %v", dirQuotaMap[path], path, err)
@@ -291,25 +320,30 @@ func doClearQuota(m mount.Interface, path string, clearQuota bool) (error) {
 	return nil
 }
 
-func ClearQuota(m mount.Interface, path string) (error) {
+func ClearQuota(path string) (error) {
 	glog.V(3).Infof("ClearQuota %s", path)
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
 	poduid, ok := dirPodMap[path]
 	if !ok {
+		glog.V(3).Infof("ClearQuota: Cannot find pod for directory %s", path)
 		return fmt.Errorf("ClearQuota: Cannot find pod for directory %s", path)
 	}
 	_, ok = podQuotaMap[poduid]
 	if !ok {
+		glog.V(3).Infof("ClearQuota: No quota available for %s", path)
 		return fmt.Errorf("ClearQuota: No quota available for %s", path)
 	}
+	consumption, er := internalGetConsumption(path)
+	glog.V(3).Infof("****** Before clearing quota consumption was %v (%v)", consumption, er)
 	clearQuota := podDirCountMap[poduid] == 1
-	err := doClearQuota(m, path, clearQuota)
+	err := doClearQuota(path, clearQuota)
 	podDirCountMap[poduid]--
 	delete(dirPodMap, path)
 	delete(dirQuotaMap, path)
-	if podDirCountMap[poduid] <= 0 {
+	if clearQuota {
 		glog.V(3).Infof("Dir count for pod %s cleared", poduid)
+		delete(quotaSizeMap, podQuotaMap[poduid])
 		delete(quotaPodMap, podQuotaMap[poduid])
 		delete(podDirCountMap, poduid)
 		delete(podQuotaMap, poduid)

@@ -22,6 +22,10 @@ import (
 
 type QuotaID int64
 
+const (
+	BadQuota QuotaID = 0
+)
+
 type Interface interface {
 	// Does the path provided support quotas, and if so, what types
 	SupportsQuotas(m mount.Interface, path string) (bool, error)
@@ -29,11 +33,11 @@ type Interface interface {
 	// and return it.
 	AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (QuotaID, error)
 	// Get the quota ID if any assigned to a path
-	GetQuotaID(m mount.Interface, path string) (QuotaID, error)
+	GetQuotaID(path string) (QuotaID, error)
 
 	// Get the quota-based storage consumption for the path
-	GetConsumption(m mount.Interface, path string) (int64, error)
+	GetConsumption(path string) (int64, error)
 
 	// Remove the quota from a path
-	ClearQuota(m mount.Interface, path string, poduid string) (error)
+	ClearQuota(path string, poduid string) (error)
 }

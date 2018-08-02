@@ -22,7 +22,7 @@ func (quota *Quota) SupportsQuotas(_ mount.Interface, _ string) (bol, error) {
 	return false, errors.New("not implemented")
 }
 
-func (quota *Quota) AssignQuota(_ mount.Interface, _ string, _ int64) (QuotaID, error) {
+func (quota *Quota) AssignQuota(_ mount.Interface, _ string, _ string, _ int64) (QuotaID, error) {
 	return 0, errors.New("not implemented")
 }
 
@@ -34,6 +34,6 @@ func (quota *Quota) GetConsumption(_ string) (int64, error) {
 	return 0, errors.New("not implemented")
 }
 
-func (quota *Quota) ClearQuota(_ string) (error) {
+func (quota *Quota) ClearQuota(_ string, _ string) (error) {
 	return errors.New("not implemented")
 }

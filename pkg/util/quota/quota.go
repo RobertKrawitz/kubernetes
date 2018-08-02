@@ -27,7 +27,7 @@ type Interface interface {
 	SupportsQuotas(m mount.Interface, path string) (bool, error)
 	// Assign a quota (picked by the quota mechanism) to a path,
 	// and return it.
-	AssignQuota(m mount.Interface, path string, bytes int64) (QuotaID, error)
+	AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (QuotaID, error)
 	// Get the quota ID if any assigned to a path
 	GetQuotaID(m mount.Interface, path string) (QuotaID, error)
 
@@ -35,5 +35,5 @@ type Interface interface {
 	GetConsumption(m mount.Interface, path string) (int64, error)
 
 	// Remove the quota from a path
-	ClearQuota(m mount.Interface, path string) (error)
+	ClearQuota(m mount.Interface, path string, poduid string) (error)
 }

@@ -238,11 +238,11 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 		volumeutil.SetReady(ed.getMetaDir())
 	}
 	if mounterArgs.DesiredSize > 0 {
-		glog.V(3).Infof("@@@@@@@@@@ Setting up bogus quota %v for %s based on desired size %v", dir, mounterArgs.DesiredSize / 2, mounterArgs.DesiredSize)
+		glog.V(3).Infof("@@@@@@@@@@ Setting up bogus quota %v for %v based on desired size %v, pod %s", dir, mounterArgs.DesiredSize / 2, mounterArgs.DesiredSize, mounterArgs.PodUID)
 		hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir)
 		if hasQuotas {
 			// We will need this at some point...
-			_, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.DesiredSize / 2)
+			_, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, mounterArgs.DesiredSize / 2)
 			if err != nil {
 				glog.V(3).Infof("Set quota failed %v", err)
 			}

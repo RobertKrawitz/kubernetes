@@ -67,6 +67,9 @@ var quotaParseRegexp *regexp.Regexp = regexp.MustCompile("^[^ \t]*[ \t]*([123456
 
 const (
 	linuxXfsMagic = 0x58465342
+	// Documented in man xfs_quota(8); not necessarily the same
+	// as the filesystem blocksize
+	quotaBsize = 1024
 	// XXXXXXX Need a better way of doing this...
 	firstQuota QuotaID = 1048577
 )
@@ -266,12 +269,12 @@ func GetQuotaID(path string) (QuotaID, error) {
 	}
 }
 
-func internalGetConsumption(path string) (int64, error) {
+func internalGetConsumption(path string, typearg string) (int64, error) {
 	id, ok := dirQuotaMap[path]
 	if !ok {
 		return 0, fmt.Errorf("No quota available for %s", path);
 	}
-	out, err := runXFSQuotaCommand(path, fmt.Sprintf("quota -N -p %v -b -n", id))
+	out, err := runXFSQuotaCommand(path, fmt.Sprintf("quota -N -p %v -%s -n", id, typearg))
 	if err != nil {
 		return 0, err
 	}
@@ -295,8 +298,17 @@ func GetConsumption(path string) (int64, error) {
 	// running the quota command, so it can't get recycled behind our back
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
-	size, error := internalGetConsumption(path)
-	return size, error
+	size, error := internalGetConsumption(path, "b")
+	return size * quotaBsize, error
+}
+
+func GetInodes(path string) (int64, error) {
+	// Note that we actually need to hold the lock at least through
+	// running the quota command, so it can't get recycled behind our back
+	quotaLock.Lock()
+	defer quotaLock.Unlock()
+	inodes, error := internalGetConsumption(path, "i")
+	return inodes, error
 }
 
 func doClearQuota(path string, clearQuota bool) (error) {
@@ -334,7 +346,7 @@ func ClearQuota(path string) (error) {
 		klog.V(3).Infof("ClearQuota: No quota available for %s", path)
 		return fmt.Errorf("ClearQuota: No quota available for %s", path)
 	}
-	consumption, er := internalGetConsumption(path)
+	consumption, er := internalGetConsumption(path, "b")
 	klog.V(3).Infof("****** Before clearing quota consumption was %v (%v)", consumption, er)
 	clearQuota := podDirCountMap[poduid] == 1
 	err := doClearQuota(path, clearQuota)

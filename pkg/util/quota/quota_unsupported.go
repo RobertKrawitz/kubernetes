@@ -34,6 +34,10 @@ func (quota *Quota) GetConsumption(_ string) (int64, error) {
 	return 0, errors.New("not implemented")
 }
 
+func (quota *Quota) GetInodes(_ string) (int64, error) {
+	return 0, errors.New("not implemented")
+}
+
 func (quota *Quota) ClearQuota(_ string, _ string) (error) {
 	return errors.New("not implemented")
 }

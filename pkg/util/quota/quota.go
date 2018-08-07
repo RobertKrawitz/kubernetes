@@ -38,6 +38,9 @@ type Interface interface {
 	// Get the quota-based storage consumption for the path
 	GetConsumption(path string) (int64, error)
 
+	// Get the quota-based inode consumption for the path
+	GetInodes(path string) (int64, error)
+
 	// Remove the quota from a path
 	ClearQuota(path string, poduid string) (error)
 }

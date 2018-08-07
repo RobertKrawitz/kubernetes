@@ -26,7 +26,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/util/quota"
 )
 
 // FSInfo linux returns (available bytes, byte capacity, byte usage, total inodes, inodes free, inode usage, error)
@@ -56,6 +58,15 @@ func FsInfo(path string) (int64, int64, int64, int64, int64, int64, error) {
 
 // DiskUsage gets disk usage of specified path.
 func DiskUsage(path string) (*resource.Quantity, error) {
+	// First check whether the quota system knows about this directory
+	data, err := quota.GetConsumption(path)
+	if err == nil {
+		glog.V(3).Infof("!!!!!!!! DiskUsage %s gets quota info %v", path, data)
+		var q resource.Quantity
+		q.Set(data)
+		return &q, nil
+	}
+	glog.V(3).Infof("!!!!!!!! Failed to get quota for %s %v", path, err)
 	// Uses the same niceness level as cadvisor.fs does when running du
 	// Uses -B 1 to always scale to a blocksize of 1 byte
 	out, err := exec.Command("nice", "-n", "19", "du", "-s", "-B", "1", path).CombinedOutput()
@@ -76,6 +87,13 @@ func Find(path string) (int64, error) {
 	if path == "" {
 		return 0, fmt.Errorf("invalid directory")
 	}
+	// First check whether the quota system knows about this directory
+	inodes, err := quota.GetInodes(path)
+	if err == nil {
+		glog.V(3).Infof("!!!!!!!! DiskUsage %s gets inode quota info %v", path, inodes)
+		return inodes, nil
+	}
+	glog.V(3).Infof("!!!!!!!! Failed to get inode quota for %s %v", path, err)
 	var counter byteCounter
 	var stderr bytes.Buffer
 	findCmd := exec.Command("find", path, "-xdev", "-printf", ".")

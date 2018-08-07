@@ -39,7 +39,11 @@ import (
 // from the group attribute.
 //
 // http://issue.k8s.io/2630
-const perm os.FileMode = 0777
+const (
+	bitsPerWord = 32 << (^uint(0) >> 63) // either 32 or 64
+	maxInt int64 = 1 << (bitsPerWord - 1) - 1 // either 1<<31 - 1 or 1<<63 - 1
+	perm os.FileMode = 0777
+)
 
 // This is the primary entrypoint for volume plugins.
 func ProbeVolumePlugins() []volume.VolumePlugin {
@@ -238,11 +242,14 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 		volumeutil.SetReady(ed.getMetaDir())
 	}
 	if mounterArgs.DesiredSize > 0 {
-		glog.V(3).Infof("@@@@@@@@@@ Setting up bogus quota %v for %v based on desired size %v, pod %s", dir, mounterArgs.DesiredSize / 2, mounterArgs.DesiredSize, mounterArgs.PodUID)
+		// bogusQuota := mounterArgs.DesiredSize / 2
+		// For non-enforced quotas
+		bogusQuota := maxInt
+		glog.V(3).Infof("@@@@@@@@@@ Setting up bogus quota %v for %v based on desired size %v, pod %s, group %v", dir, bogusQuota, mounterArgs.DesiredSize, mounterArgs.PodUID, mounterArgs.FsGroup)
 		hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir)
 		if hasQuotas {
 			// We will need this at some point...
-			quotaID, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, mounterArgs.DesiredSize / 2)
+			quotaID, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, bogusQuota)
 			if err != nil {
 				glog.V(3).Infof("Set quota failed %v", err)
 			} else {

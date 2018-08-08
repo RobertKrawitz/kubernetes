@@ -200,7 +200,6 @@ func (b *emptyDir) CanMount() error {
 
 // SetUp creates new directory.
 func (ed *emptyDir) SetUp(mounterArgs volume.MounterArgs) error {
-	glog.V(3).Infof("##### Emptydir Setup %#+v Size %v", ed, mounterArgs.DesiredSize)
 	return ed.SetUpAt(ed.GetPath(), mounterArgs)
 }
 
@@ -245,7 +244,6 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 		// bogusQuota := mounterArgs.DesiredSize / 2
 		// For non-enforced quotas
 		bogusQuota := maxInt
-		glog.V(3).Infof("@@@@@@@@@@ Setting up bogus quota %v for %v based on desired size %v, pod %s, group %v", dir, bogusQuota, mounterArgs.DesiredSize, mounterArgs.PodUID, mounterArgs.FsGroup)
 		hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir)
 		if hasQuotas {
 			// We will need this at some point...
@@ -256,7 +254,6 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 				ed.quotaID = quotaID
 			}
 		}
-		glog.V(3).Infof("SETUP ed %#+v", ed)
 	}
 
 	return err
@@ -421,14 +418,15 @@ func (ed *emptyDir) TearDownAt(dir string) error {
 
 func (ed *emptyDir) teardownDefault(dir string) error {
 	// Remove any quota
-	glog.V(3).Infof("TEARDOWN ed %#+v", ed)
-	err := quota.ClearQuota(dir)
-	if err != nil {
-		glog.V(3).Infof("Failed to clear quota on %s: %v", dir, err)
+	if _, err := quota.GetConsumption(dir); err == nil {
+		err := quota.ClearQuota(dir)
+		if err != nil {
+			glog.V(3).Infof("Failed to clear quota on %s: %v", dir, err)
+		}
 	}
 	// Renaming the directory is not required anymore because the operation executor
 	// now handles duplicate operations on the same volume
-	err = os.RemoveAll(dir)
+	err := os.RemoveAll(dir)
 	if err != nil {
 		return err
 	}

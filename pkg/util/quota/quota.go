@@ -20,7 +20,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/mount"
 )
 
-type QuotaID int64
+type QuotaID int32
 
 const (
 	BadQuota QuotaID = 0
@@ -42,5 +42,7 @@ type Interface interface {
 	GetInodes(path string) (int64, error)
 
 	// Remove the quota from a path
+	// Implementations may assume that any data covered by the
+	// quota has already been removed.
 	ClearQuota(path string, poduid string) (error)
 }

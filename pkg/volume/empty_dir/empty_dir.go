@@ -417,18 +417,18 @@ func (ed *emptyDir) TearDownAt(dir string) error {
 }
 
 func (ed *emptyDir) teardownDefault(dir string) error {
+	// Renaming the directory is not required anymore because the operation executor
+	// now handles duplicate operations on the same volume
+	err := os.RemoveAll(dir)
+	if err != nil {
+		return err
+	}
 	// Remove any quota
 	if _, err := quota.GetConsumption(dir); err == nil {
 		err := quota.ClearQuota(dir)
 		if err != nil {
 			glog.V(3).Infof("Failed to clear quota on %s: %v", dir, err)
 		}
-	}
-	// Renaming the directory is not required anymore because the operation executor
-	// now handles duplicate operations on the same volume
-	err := os.RemoveAll(dir)
-	if err != nil {
-		return err
 	}
 	return nil
 }

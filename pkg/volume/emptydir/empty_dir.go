@@ -182,7 +182,7 @@ type emptyDir struct {
 
 func (ed *emptyDir) GetAttributes() volume.Attributes {
 	hasQuotas, _ := quota.SupportsQuotas(ed.mounter, ed.GetPath())
-	glog.V(3).Infof("GetAttributes volume %s supports quotas %v", ed.GetPath(), hasQuotas)
+	klog.V(3).Infof("GetAttributes volume %s supports quotas %v", ed.GetPath(), hasQuotas)
 	return volume.Attributes{
 		ReadOnly:        false,
 		Managed:         true,
@@ -250,7 +250,7 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 		// We will need this at some point...
 		quotaID, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, desiredQuota)
 		if err != nil {
-			glog.V(3).Infof("Set quota failed %v", err)
+			klog.V(3).Infof("Set quota failed %v", err)
 		} else {
 			ed.quotaID = quotaID
 		}
@@ -417,18 +417,18 @@ func (ed *emptyDir) TearDownAt(dir string) error {
 }
 
 func (ed *emptyDir) teardownDefault(dir string) error {
-	// Remove any quota
-	if _, err := quota.GetConsumption(dir); err == nil {
-		err := quota.ClearQuota(dir)
-		if err != nil {
-			glog.V(3).Infof("Failed to clear quota on %s: %v", dir, err)
-		}
-	}
 	// Renaming the directory is not required anymore because the operation executor
 	// now handles duplicate operations on the same volume
 	err := os.RemoveAll(dir)
 	if err != nil {
 		return err
+	}
+	// Remove any quota
+	if _, err := quota.GetConsumption(dir); err == nil {
+		err := quota.ClearQuota(dir)
+		if err != nil {
+			klog.V(3).Infof("Failed to clear quota on %s: %v", dir, err)
+		}
 	}
 	return nil
 }

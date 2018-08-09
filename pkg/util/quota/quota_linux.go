@@ -18,19 +18,59 @@ limitations under the License.
 
 package quota
 
+/*
+#include <stdlib.h>
+#include <dirent.h>
+#include <linux/fs.h>
+#include <linux/quota.h>
+#include <linux/dqblk_xfs.h>
+
+#ifndef FS_XFLAG_PROJINHERIT
+struct fsxattr {
+	__u32		fsx_xflags;
+	__u32		fsx_extsize;
+	__u32		fsx_nextents;
+	__u32		fsx_projid;
+	unsigned char	fsx_pad[12];
+};
+#define FS_XFLAG_PROJINHERIT	0x00000200
+#endif
+#ifndef FS_IOC_FSGETXATTR
+#define FS_IOC_FSGETXATTR		_IOR ('X', 31, struct fsxattr)
+#endif
+#ifndef FS_IOC_FSSETXATTR
+#define FS_IOC_FSSETXATTR		_IOW ('X', 32, struct fsxattr)
+#endif
+
+#ifndef PRJQUOTA
+#define PRJQUOTA	2
+#endif
+#ifndef XFS_PROJ_QUOTA
+#define XFS_PROJ_QUOTA	2
+#endif
+#ifndef Q_XSETPQLIM
+#define Q_XSETPQLIM QCMD(Q_XSETQLIM, PRJQUOTA)
+#endif
+#ifndef Q_XGETPQUOTA
+#define Q_XGETPQUOTA QCMD(Q_XGETQUOTA, PRJQUOTA)
+#endif
+
+const int Q_XGETQSTAT_PRJQUOTA = QCMD(Q_XGETQSTAT, PRJQUOTA);
+*/
+import "C"
+
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
-	"golang.org/x/sys/unix"
 	"sync"
 	"regexp"
-	"strconv"
+	"unsafe"
+	"bufio"
 
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/util/mount"
+	"golang.org/x/sys/unix"
 )
 
 
@@ -48,22 +88,16 @@ var podDirCountMap = make(map[string]int)
 var quotaSizeMap   = make(map[QuotaID]int64)
 var quotaLock sync.RWMutex
 
-// Directory -> mountpoint
-var mountpointsMap = make(map[string]string)
-var mountpointLock sync.RWMutex
+// Directory -> backingDev
+var backingDevsMap = make(map[string]string)
+var backingDevLock sync.RWMutex
 
 var supportsQuotasMap = make(map[string]bool)
 var supportsQuotasLock sync.RWMutex
 
-var quotaCmd string
-var quotaCmdInitialized bool
-var quotaCmdLock sync.RWMutex
-
-var quotaCmds = []string{"/sbin/xfs_quota",
-	"/usr/sbin/xfs_quota",
-	"/bin/xfs_quota"}
-
 var quotaParseRegexp *regexp.Regexp = regexp.MustCompile("^[^ \t]*[ \t]*([123456789][0123456789]*)")
+
+var mountParseRegexp *regexp.Regexp = regexp.MustCompile("^(/[^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
 
 const (
 	linuxXfsMagic = 0x58465342
@@ -72,101 +106,111 @@ const (
 	quotaBsize = 1024
 	// XXXXXXX Need a better way of doing this...
 	firstQuota QuotaID = 1048577
+	// Location of mount table
+	mountsFile = "/proc/self/mounts"
 )
 
-func detectMountpoint(m mount.Interface, path string) (error) {
+func detectMountpoint(m mount.Interface, path string) (string, error) {
 	xpath, err := filepath.Abs(path)
-	if err != nil {
-		return err
-	}
+ 	if err != nil {
+ 		return "/", err
+ 	}
 	xpath, err = filepath.EvalSymlinks(xpath)
+ 	if err != nil {
+ 		return "/", err
+ 	}
+ 	for xpath != "" {
+		isNotMount, err := m.IsNotMountPoint(xpath)
+ 		if err != nil {
+ 			return "/", err
+ 		}
+ 		if !isNotMount {
+			klog.V(3).Infof("getMountpoint %s found! %s", path, xpath)
+			return xpath, nil
+ 		}
+ 		xpath = filepath.Dir(xpath)
+	}
+	return "/", nil
+}
+
+func free(p *C.char) {
+	C.free(unsafe.Pointer(p))
+}
+
+func openDir(path string) (*C.DIR, error) {
+	Cpath := C.CString(path)
+	defer free(Cpath)
+
+	dir := C.opendir(Cpath)
+	if dir == nil {
+		return nil, fmt.Errorf("Can't open dir")
+	}
+	return dir, nil
+}
+
+func closeDir(dir *C.DIR) {
+	if dir != nil {
+		C.closedir(dir)
+	}
+}
+
+func getDirFd(dir *C.DIR) uintptr {
+	return uintptr(C.dirfd(dir))
+}
+
+func detectBackingDev(m mount.Interface, path string) (error) {
+	mountpoint, err := detectMountpoint(m, path)
 	if err != nil {
 		return err
 	}
-	for xpath != "" {
-		isNotMount, err := m.IsNotMountPoint(xpath)
-		if err != nil {
-			return err
-		}
-		if !isNotMount {
-			klog.V(3).Infof("getMountpoint %s found! %s", path, xpath)
-			mountpointsMap[path] = xpath
-			return nil
-		}
-		xpath = filepath.Dir(xpath)
+	file, err := os.Open(mountsFile)
+	if err != nil {
+		return err
 	}
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		match := mountParseRegexp.FindStringSubmatch(scanner.Text())
+		if match != nil {
+			device := match[1]
+			mount := match[2]
+			klog.V(3).Infof("detectBackingDev looking for mountpoint %s %s", mountpoint, mount)
+			if mount == mountpoint {
+				klog.V(3).Infof("Found device for %s: %s", path, device)
+				backingDevsMap[path] = device
+				return nil
+			}
+		}
+	}
+	klog.V(3).Infof("Couldn't find backing device for %s!", path)
 	return nil
-}	
-
-// getMountpoint returns the mount point for the specified path
-func getMountpoint(path string) (string, error) {
-	mountpointLock.Lock()
-	defer mountpointLock.Unlock()
-	if mountpoint, ok := mountpointsMap[path]; ok {
-		return mountpoint, nil
-	}
-	return "/", fmt.Errorf("Mount point not found for %s", path);
 }
 
-func getXFSQuotaCmd() (string, error) {
-	quotaCmdLock.Lock()
-	defer quotaCmdLock.Unlock()
-	if (quotaCmdInitialized) {
-		return quotaCmd, nil
+// getBackingDev returns the mount point for the specified path
+// It assumes the map has already been created; we don't get a mount
+// interface here to look for it!
+func getBackingDev(path string) (string, error) {
+	backingDevLock.Lock()
+	defer backingDevLock.Unlock()
+	if backingDev, ok := backingDevsMap[path]; ok {
+		return backingDev, nil
 	}
-	for _, program := range quotaCmds {
-		fileinfo, err := os.Stat(program)
-		if err == nil && ((fileinfo.Mode().Perm() & (1 << 6)) != 0) {
-			klog.V(3).Infof("Found %s", program)
-			quotaCmd = program
-			quotaCmdInitialized = true
-			return quotaCmd, nil
-		}
-	}
-	klog.V(3).Infof("No xfs_quota program found")
-	quotaCmdInitialized = true
-	return "", fmt.Errorf("No xfs_quota program found")
-}
-
-func runXFSQuotaCommand(path string, command string) (*exec.Cmd, error) {
-	quotaCmd, err := getXFSQuotaCmd()
-	if err != nil {
-		return nil, err
-	}
-	mountpoint, err := getMountpoint(path)
-	if err != nil {
-		return nil, err
-	}
-	klog.V(3).Infof("runXFSQuotaCommand %s -x %s -c %s", quotaCmd, mountpoint, command)
-	cmd := exec.Command(quotaCmd, "-x", mountpoint, "-c", command)
-
-	return cmd, nil
+	return "/", fmt.Errorf("Backing device not found for %s", path);
 }
 
 func detectSupportsQuotas(path string) (bool, error) {
 	// For now, we're only going to do quotas on XFS
+	var qstat C.fs_quota_stat_t
 	klog.V(3).Infof("detectSupportQuota %s", path)
-	buf := unix.Statfs_t{}
-	if err := unix.Statfs(path, &buf); err != nil {
-		return false, fmt.Errorf("statfs(%q): %v", path, err)
+
+	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, uintptr(C.Q_XGETQSTAT_PRJQUOTA), uintptr(unsafe.Pointer(C.CString(path))), 0, uintptr(unsafe.Pointer(&qstat)), 0, 0)
+	if errno == 0 {
+		if qstat.qs_flags&C.FS_QUOTA_PDQ_ENFD > 0 && qstat.qs_flags&C.FS_QUOTA_PDQ_ACCT > 0 {
+			return true, nil
+		} else {
+			return false, nil
+		}
 	}
-	if (buf.Type != linuxXfsMagic) {
-		return false, fmt.Errorf("runXFSQuotaCommand: %s not on XFS filesystem", path)
-	}
-	out, err := runXFSQuotaCommand(path, "print")
-	if err != nil {
-		klog.V(3).Infof("runXFSQuotaCommand failed %v", err)
-		return false, err
-	}
-	data, err := out.CombinedOutput()
-	
-	if err != nil {
-		return false, err
-	}
-	if strings.Contains(string(data), "pquota") {
-		return true, nil
-	}
-	return false, nil
+	return false, errno
 }
 
 // Does the path support quotas
@@ -176,38 +220,72 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 	if quotas, ok := supportsQuotasMap[path]; ok {
 		return quotas, nil
 	}
-	detectMountpoint(m, path)
-	quotas, err := detectSupportsQuotas(path)
+	err := detectBackingDev(m, path)
+	if err != nil {
+		klog.V(3).Infof("SupportsQuotas failed %v", err)
+		return false, err
+	}
+	supportsQuotas, err := detectSupportsQuotas(backingDevsMap[path])
 	if err != nil {
 		klog.V(3).Infof("SupportsQuotas failed %v", err)
 	}
-	supportsQuotasMap[path] = quotas
-	return quotas, err
+	supportsQuotasMap[path] = supportsQuotas
+	return supportsQuotas, err
 }
 
 func setQuotaOn(path string, id QuotaID, bytes int64) error {
 	klog.V(3).Infof("setQuotaOn %s ID %v bytes %v", path, id, bytes)
-	cmd, err := runXFSQuotaCommand(path, fmt.Sprintf("limit -p bhard=%v %v", bytes, id))
-	if err != nil {
-		return err
+
+	backingFsBlockDev, ok := getBackingDev(path)
+	if ok != nil {
+		return fmt.Errorf("Cannot find backing device for %s", path)
 	}
-	_, err = cmd.CombinedOutput()
-	if err != nil {
-		return err
+
+	var d C.fs_disk_quota_t
+	d.d_version = C.FS_DQUOT_VERSION
+	d.d_id = C.__u32(id)
+	d.d_flags = C.XFS_PROJ_QUOTA
+
+	d.d_fieldmask = C.FS_DQ_BHARD
+	d.d_blk_hardlimit = C.__u64(bytes / 512)
+	d.d_blk_softlimit = d.d_blk_hardlimit
+
+	var cs = C.CString(backingFsBlockDev)
+	defer C.free(unsafe.Pointer(cs))
+
+	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XSETPQLIM,
+		uintptr(unsafe.Pointer(cs)), uintptr(d.d_id),
+		uintptr(unsafe.Pointer(&d)), 0, 0)
+	if errno != 0 {
+		return fmt.Errorf("Failed to set quota limit for ID %d on %s: %v",
+			id, path, errno.Error())
 	}
-	cmd, err = runXFSQuotaCommand(path, fmt.Sprintf("project -s -p %s %v", path, id))
-	if err != nil {
-		return err
+	if (bytes > 0) {
+		dir, err := openDir(path)
+		if err != nil {
+			return err
+		}
+		defer closeDir(dir)
+
+		var fsx C.struct_fsxattr
+		_, _, errno = unix.Syscall(unix.SYS_IOCTL, getDirFd(dir), C.FS_IOC_FSGETXATTR,
+			uintptr(unsafe.Pointer(&fsx)))
+		if errno != 0 {
+			return fmt.Errorf("Failed to get projid for %s: %v", path, errno.Error())
+		}
+		fsx.fsx_projid = C.__u32(id)
+		fsx.fsx_xflags |= C.FS_XFLAG_PROJINHERIT
+		_, _, errno = unix.Syscall(unix.SYS_IOCTL, getDirFd(dir), C.FS_IOC_FSSETXATTR,
+			uintptr(unsafe.Pointer(&fsx)))
+		if errno != 0 {
+			return fmt.Errorf("Failed to set projid for %s: %v", path, errno.Error())
+		}
 	}
-	_, err = cmd.CombinedOutput()
-	return err
+	return nil
 }
 
 func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (QuotaID, error) {
-	err := detectMountpoint(m, path)
-	if err != nil {
-		return BadQuota, fmt.Errorf("Cannot detect mountpoint for %s: %v", path, err)
-	}
+
 	ok, err := SupportsQuotas(m, path)
 	if !ok {
 		return BadQuota, fmt.Errorf("Quotas not supported on %s: %v", path, err)
@@ -274,24 +352,35 @@ func internalGetConsumption(path string, typearg string) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("No quota available for %s", path);
 	}
-	out, err := runXFSQuotaCommand(path, fmt.Sprintf("quota -N -p %v -%s -n", id, typearg))
+	backingFsBlockDev, err := getBackingDev(path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("Cannot find backing device for %s", path)
 	}
-	data, err := out.Output()
-	if err != nil {
-		return 0, err
+
+	var d C.fs_disk_quota_t
+
+	var cs = C.CString(backingFsBlockDev)
+	defer C.free(unsafe.Pointer(cs))
+
+	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
+		uintptr(unsafe.Pointer(cs)), uintptr(C.__u32(id)),
+		uintptr(unsafe.Pointer(&d)), 0, 0)
+	if errno != 0 {
+		return 0, fmt.Errorf("Failed to get consumption for dir %s: %v",
+			path, errno.Error())
 	}
-	match := quotaParseRegexp.FindStringSubmatch(string(data))
-	if match == nil {
-		return 0, fmt.Errorf("Unable to parse quota output")
+
+	switch typearg {
+	case "b":
+		klog.V(3).Infof("Consumption for %s is %v", path, d.d_bcount * 512)
+		return int64(d.d_bcount) * 512, nil
+	case "i":
+		klog.V(3).Infof("Inode consumption for %s is %v", path, d.d_icount)
+		return int64(d.d_icount), nil
+	default:
+		return 0, fmt.Errorf("Unknown quota type %s", typearg)
 	}
-	size, err := strconv.ParseInt(match[1], 10, 64)
-	if match == nil {
-		return 0, fmt.Errorf("Unable to parse quota output")
-	}
-	return size, nil
-}	
+}
 
 func GetConsumption(path string) (int64, error) {
 	// Note that we actually need to hold the lock at least through
@@ -311,20 +400,12 @@ func GetInodes(path string) (int64, error) {
 	return inodes, error
 }
 
+// We should recursively clear the quota, but we're only going to delete
+// the directory afterwards.
 func doClearQuota(path string, clearQuota bool) (error) {
-	// Disassociate the directory from the quota
-	cmd, err := runXFSQuotaCommand(path, fmt.Sprintf("project -C -p %s %v", path, dirQuotaMap[path]))
-	err = cmd.Run()
-	if err != nil {
-		klog.V(3).Infof("Unable to disassociate quota %v %s: %v", dirQuotaMap[path], path, err)
-		return err
-	}
-
 	// If the refcount is going to go to zero, clear the quota
 	if clearQuota {
-		cmd, err := runXFSQuotaCommand(path, fmt.Sprintf("limit -p bhard=0 %v", dirQuotaMap[path]))
-		err = cmd.Run()
-		if err != nil {
+		if err := setQuotaOn(path, dirQuotaMap[path], 0); err != nil {
 			klog.V(3).Infof("Unable to clear quota %v %s: %v", dirQuotaMap[path], path, err)
 			return err
 		}
@@ -362,9 +443,9 @@ func ClearQuota(path string) (error) {
 	} else {
 		klog.V(3).Infof("Not clearing quota for pod %s; still %v dirs outstanding", poduid, podDirCountMap[poduid])
 	}
-	mountpointLock.Lock()
-	delete(mountpointsMap, path)
-	mountpointLock.Unlock()
+	backingDevLock.Lock()
+	delete(backingDevsMap, path)
+	backingDevLock.Unlock()
 	supportsQuotasLock.Lock()
 	delete(supportsQuotasMap, path)
 	supportsQuotasLock.Unlock()

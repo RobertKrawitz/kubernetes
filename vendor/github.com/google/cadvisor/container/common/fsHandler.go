@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"runtime/debug"
 
 	"github.com/google/cadvisor/fs"
 
@@ -60,6 +61,7 @@ const DefaultPeriod = time.Minute
 var _ FsHandler = &realFsHandler{}
 
 func NewFsHandler(period time.Duration, rootfs, extraDir string, fsInfo fs.FsInfo) FsHandler {
+	glog.V(3).Infof(">>>>> CADVISOR NewFsHandler root %s extra %s info %#+v\nStack:\n%s\n", rootfs, extraDir, fsInfo, debug.Stack())
 	return &realFsHandler{
 		lastUpdate: time.Time{},
 		usage:      FsUsage{},
@@ -81,6 +83,7 @@ func (fh *realFsHandler) update() error {
 	if fh.rootfs != "" {
 		baseUsage, rootDiskErr = fh.fsInfo.GetDirDiskUsage(fh.rootfs, timeout)
 		inodeUsage, rootInodeErr = fh.fsInfo.GetDirInodeUsage(fh.rootfs, timeout)
+		glog.V(3).Infof(">>>>> CADVISOR update fs %s total %v\nfs: %#+v\nStack:\n%s", fh.rootfs, baseUsage, fh, debug.Stack())
 	}
 
 	if fh.extraDir != "" {

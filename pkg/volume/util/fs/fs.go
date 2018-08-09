@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+	"github.com/golang/glog"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/util/quota"
@@ -71,6 +72,7 @@ func DiskUsage(path string) (*resource.Quantity, error) {
 		return nil, fmt.Errorf("failed command 'du' ($ nice -n 19 du -s -B 1) on path %s with error %v", path, err)
 	}
 	used, err := resource.ParseQuantity(strings.Fields(string(out))[0])
+	glog.V(3).Infof(">>>>> NATIVE used %s", string(out))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse 'du' output %s due to error %v", out, err)
 	}

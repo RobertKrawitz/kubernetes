@@ -31,6 +31,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"runtime/debug"
 
 	"github.com/docker/docker/pkg/mount"
 	"github.com/golang/glog"
@@ -597,6 +598,7 @@ func GetDirDiskUsage(dir string, timeout time.Duration) (uint64, error) {
 		return 0, fmt.Errorf("du command failed on %s with output stdout: %s, stderr: %s - %v", dir, string(stdoutb), string(stderrb), err)
 	}
 	stdout := string(stdoutb)
+	glog.V(3).Infof(">>>>> CADVISOR GetDirDiskUsage %s %v\nStack:\n%s", dir, stdout, debug.Stack())
 	usageInKb, err := strconv.ParseUint(strings.Fields(stdout)[0], 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("cannot parse 'du' output %s - %s", stdout, err)

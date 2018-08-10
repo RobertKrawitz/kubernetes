@@ -211,7 +211,7 @@ func (c *csiMountMgr) SetUpAt(dir string, mounterArgs volume.MounterArgs) error 
 	// if fstype is "", then skip fsgroup (could be indication of non-block filesystem)
 	// if fstype is provided and pv.AccessMode == ReadWriteOnly, then apply fsgroup
 
-	err = c.applyFSGroup(fsType, fsGroup)
+	err = c.applyFSGroup(fsType, mounterArgs.FsGroup)
 	if err != nil {
 		// attempt to rollback mount.
 		fsGrpErr := fmt.Errorf("applyFSGroup failed for vol %s: %v", c.volumeID, err)

@@ -201,7 +201,7 @@ func TestInvalidLocalPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = mounter.SetUp(nil)
+	err = mounter.SetUp(volume.MounterArgs{})
 	expectedMsg := "invalid path: /no/backsteps/allowed/.. must not contain '..'"
 	if err.Error() != expectedMsg {
 		t.Fatalf("expected error `%s` but got `%s`", expectedMsg, err)
@@ -308,7 +308,7 @@ func TestMountUnmount(t *testing.T) {
 		t.Errorf("Got unexpected path: %s", path)
 	}
 
-	if err := mounter.SetUp(nil); err != nil {
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 
@@ -399,7 +399,7 @@ func TestMapUnmap(t *testing.T) {
 }
 
 func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, mounterArgs.FsGroup int64) error {
-	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false, nil), pod, volume.VolumeOptions{})
+	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false), pod, volume.VolumeOptions{})
 	if err != nil {
 		return err
 	}
@@ -413,7 +413,9 @@ func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, moun
 		return fmt.Errorf("Got unexpected path: %s", path)
 	}
 
-	if err := mounter.SetUp(&mounterArgs.FsGroup); err != nil {
+	var mounterArgs volume.MounterArgs
+	mounterArgs.FsGroup = &FsGroup
+	if err := mounter.SetUp(mounterArgs); err != nil {
 		return err
 	}
 	return nil

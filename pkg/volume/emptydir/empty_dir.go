@@ -240,19 +240,21 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	if err == nil {
 		volumeutil.SetReady(ed.getMetaDir())
 	}
-	if hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir); hasQuotas && mounterArgs.DesiredSize != 0 {
-		var desiredQuota int64
-		if (mounterArgs.DesiredSize < 0) {
-			desiredQuota = maxInt // Monitoring only
-		} else {
-			desiredQuota = mounterArgs.DesiredSize // Enforcement
-		}
-		// We will need this at some point...
-		quotaID, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, desiredQuota)
-		if err != nil {
-			klog.V(3).Infof("Set quota failed %v", err)
-		} else {
-			ed.quotaID = quotaID
+	if (mounterArgs.DesiredSize != 0) {
+		if hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir); hasQuotas  {
+			var desiredQuota int64
+			if (mounterArgs.DesiredSize < 0) {
+				desiredQuota = maxInt // Monitoring only
+			} else {
+				desiredQuota = mounterArgs.DesiredSize // Enforcement
+			}
+			// We will need this at some point...
+			quotaID, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, desiredQuota)
+			if err != nil {
+				klog.V(3).Infof("Set quota failed %v", err)
+			} else {
+				ed.quotaID = quotaID
+			}
 		}
 	}
 

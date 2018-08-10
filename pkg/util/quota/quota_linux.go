@@ -24,6 +24,7 @@ package quota
 #include <linux/fs.h>
 #include <linux/quota.h>
 #include <linux/dqblk_xfs.h>
+#include <errno.h>
 
 #ifndef FS_XFLAG_PROJINHERIT
 struct fsxattr {
@@ -67,9 +68,11 @@ import (
 	"regexp"
 	"unsafe"
 	"bufio"
+	"strconv"
 
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"golang.org/x/sys/unix"
 )
 
@@ -99,15 +102,20 @@ var quotaParseRegexp *regexp.Regexp = regexp.MustCompile("^[^ \t]*[ \t]*([123456
 
 var mountParseRegexp *regexp.Regexp = regexp.MustCompile("^(/[^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
 
+var projectsParseRegexp *regexp.Regexp = regexp.MustCompile("^([0123456789][0123456789]*):")
+var projidParseRegexp *regexp.Regexp = regexp.MustCompile("^[^:#][^:#]*:([0123456789][0123456789]*)")
+
 const (
 	linuxXfsMagic = 0x58465342
 	// Documented in man xfs_quota(8); not necessarily the same
 	// as the filesystem blocksize
-	quotaBsize = 1024
+	quotaBsize = 512
 	// XXXXXXX Need a better way of doing this...
 	firstQuota QuotaID = 1048577
 	// Location of mount table
 	mountsFile = "/proc/self/mounts"
+	projectsFile = "/etc/projects"
+	projidFile = "/etc/projid"
 )
 
 func detectMountpoint(m mount.Interface, path string) (string, error) {
@@ -167,15 +175,14 @@ func detectBackingDev(m mount.Interface, path string) (error) {
 	if err != nil {
 		return err
 	}
+	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		match := mountParseRegexp.FindStringSubmatch(scanner.Text())
 		if match != nil {
 			device := match[1]
 			mount := match[2]
-			klog.V(3).Infof("detectBackingDev looking for mountpoint %s %s", mountpoint, mount)
 			if mount == mountpoint {
-				klog.V(3).Infof("Found device for %s: %s", path, device)
 				backingDevsMap[path] = device
 				return nil
 			}
@@ -200,16 +207,18 @@ func getBackingDev(path string) (string, error) {
 func detectSupportsQuotas(path string) (bool, error) {
 	// For now, we're only going to do quotas on XFS
 	var qstat C.fs_quota_stat_t
-	klog.V(3).Infof("detectSupportQuota %s", path)
 
 	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, uintptr(C.Q_XGETQSTAT_PRJQUOTA), uintptr(unsafe.Pointer(C.CString(path))), 0, uintptr(unsafe.Pointer(&qstat)), 0, 0)
 	if errno == 0 {
 		if qstat.qs_flags&C.FS_QUOTA_PDQ_ENFD > 0 && qstat.qs_flags&C.FS_QUOTA_PDQ_ACCT > 0 {
+			klog.V(3).Infof("detectSupportQuota %s YES", path)
 			return true, nil
 		} else {
+			klog.V(3).Infof("detectSupportQuota %s NO", path)
 			return false, nil
 		}
 	}
+	klog.V(3).Infof("detectSupportQuota %s FAILED %v", path, errno)
 	return false, errno
 }
 
@@ -271,17 +280,68 @@ func setQuotaOn(path string, id QuotaID, bytes int64) error {
 		_, _, errno = unix.Syscall(unix.SYS_IOCTL, getDirFd(dir), C.FS_IOC_FSGETXATTR,
 			uintptr(unsafe.Pointer(&fsx)))
 		if errno != 0 {
-			return fmt.Errorf("Failed to get projid for %s: %v", path, errno.Error())
+			return fmt.Errorf("Failed to get quota ID for %s: %v", path, errno.Error())
 		}
 		fsx.fsx_projid = C.__u32(id)
 		fsx.fsx_xflags |= C.FS_XFLAG_PROJINHERIT
 		_, _, errno = unix.Syscall(unix.SYS_IOCTL, getDirFd(dir), C.FS_IOC_FSSETXATTR,
 			uintptr(unsafe.Pointer(&fsx)))
 		if errno != 0 {
-			return fmt.Errorf("Failed to set projid for %s: %v", path, errno.Error())
+			return fmt.Errorf("Failed to set quota ID for %s: %v", path, errno.Error())
 		}
 	}
 	return nil
+}
+
+func projectIsPresent(id QuotaID, file string, re *regexp.Regexp) bool {
+	fd, err := os.Open(file)
+	if err != nil {
+		return false
+	}
+	defer fd.Close()
+	scanner := bufio.NewScanner(fd)
+	for scanner.Scan() {
+		match := re.FindStringSubmatch(scanner.Text())
+		if match != nil {
+			pid := match[1]
+			if i, err := strconv.Atoi(pid); err == nil && int(id) == i {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func idIsInUse(path string, id QuotaID) bool {
+	// First check /etc/project and /etc/projid to see if project
+	// is listed; if it is we consider it in use.
+	if projectIsPresent(id, projectsFile, projectsParseRegexp) ||
+		projectIsPresent(id, projidFile, projidParseRegexp) {
+		return true
+	}
+
+	backingFsBlockDev, err := getBackingDev(path)
+	if err != nil {
+		return false
+	}
+
+	var d C.fs_disk_quota_t
+
+	var cs = C.CString(backingFsBlockDev)
+	defer C.free(unsafe.Pointer(cs))
+
+	// Merely having a quota assigned is not sufficient to consider
+	// it to be in use.  Until we can persistently store quota IDs,
+	// they won't be cleaned up when the kubelet restarts, and we
+	// eon't want to leak them.
+	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
+		uintptr(unsafe.Pointer(cs)), uintptr(C.__u32(id)),
+		uintptr(unsafe.Pointer(&d)), 0, 0)
+	if errno != 0 || d.d_bcount == 0 {
+		return false
+	} else {
+		return true
+	}
 }
 
 func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (QuotaID, error) {
@@ -292,6 +352,13 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (Qu
 	}
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
+	// Current policy is to set individual quotas on each volumes.
+	// If we decide later that we want to assign one quota for all
+	// volumes in a pod, we can simply remove this line of code.
+	// If and when we decide permanently that we're going to adop
+	// one quota per volume, we can rip all of the pod code out.
+	poduid = string(uuid.NewUUID())
+	klog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", poduid, path)
 	pod, ok := dirPodMap[path]
 	if ok {
 		if pod != poduid {
@@ -313,25 +380,29 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (Qu
 		}
 	}
 	for id := firstQuota; id == id; id++ {
-		_, ok := quotaPodMap[id]
-		if ! ok {
-			err := setQuotaOn(path, id, bytes)
-			if err != nil {
-				klog.V(3).Infof("Assign quota FAILED %v", err)
-				return QuotaID(0), err
-			}
-			quotaPodMap[id]     = poduid
-			quotaSizeMap[id]    = bytes
-			podQuotaMap[poduid] = id
-			dirQuotaMap[path]   = id
-			dirPodMap[path]     = poduid
-			if count, ok := podDirCountMap[poduid]; ok {
-				podDirCountMap[poduid] = count + 1
-			} else {
-				podDirCountMap[poduid] = 1
-			}
-			return id, nil
+		if _, ok := quotaPodMap[id]; ok {
+			continue
 		}
+		if idIsInUse(path, id) {
+			klog.V(3).Infof("Project ID %v is in use, try again", id)
+			continue
+		}
+		err := setQuotaOn(path, id, bytes)
+		if err != nil {
+			klog.V(3).Infof("Assign quota FAILED %v", err)
+			return QuotaID(0), err
+		}
+		quotaPodMap[id]     = poduid
+		quotaSizeMap[id]    = bytes
+		podQuotaMap[poduid] = id
+		dirQuotaMap[path]   = id
+		dirPodMap[path]     = poduid
+		if count, ok := podDirCountMap[poduid]; ok {
+			podDirCountMap[poduid] = count + 1
+		} else {
+			podDirCountMap[poduid] = 1
+		}
+		return id, nil
 	}
 	return QuotaID(0), fmt.Errorf("Unable to find a quota ID for %s", path)
 }
@@ -373,7 +444,7 @@ func internalGetConsumption(path string, typearg string) (int64, error) {
 	switch typearg {
 	case "b":
 		klog.V(3).Infof("Consumption for %s is %v", path, d.d_bcount * 512)
-		return int64(d.d_bcount) * 512, nil
+		return int64(d.d_bcount) * quotaBsize, nil
 	case "i":
 		klog.V(3).Infof("Inode consumption for %s is %v", path, d.d_icount)
 		return int64(d.d_icount), nil
@@ -388,7 +459,7 @@ func GetConsumption(path string) (int64, error) {
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
 	size, error := internalGetConsumption(path, "b")
-	return size * quotaBsize, error
+	return size, error
 }
 
 func GetInodes(path string) (int64, error) {
@@ -419,23 +490,19 @@ func ClearQuota(path string) (error) {
 	defer quotaLock.Unlock()
 	poduid, ok := dirPodMap[path]
 	if !ok {
-		klog.V(3).Infof("ClearQuota: Cannot find pod for directory %s", path)
 		return fmt.Errorf("ClearQuota: Cannot find pod for directory %s", path)
 	}
 	_, ok = podQuotaMap[poduid]
 	if !ok {
-		klog.V(3).Infof("ClearQuota: No quota available for %s", path)
 		return fmt.Errorf("ClearQuota: No quota available for %s", path)
 	}
-	consumption, er := internalGetConsumption(path, "b")
-	klog.V(3).Infof("****** Before clearing quota consumption was %v (%v)", consumption, er)
-	clearQuota := podDirCountMap[poduid] == 1
-	err := doClearQuota(path, clearQuota)
+	var err error
 	podDirCountMap[poduid]--
-	delete(dirPodMap, path)
-	delete(dirQuotaMap, path)
-	if clearQuota {
-		klog.V(3).Infof("Dir count for pod %s cleared", poduid)
+	if podDirCountMap[poduid] == 0 {
+		err := setQuotaOn(path, dirQuotaMap[path], 0)
+		if err != nil {
+			klog.V(3).Infof("Unable to clear quota %v %s: %v", dirQuotaMap[path], path, err)
+		}
 		delete(quotaSizeMap, podQuotaMap[poduid])
 		delete(quotaPodMap, podQuotaMap[poduid])
 		delete(podDirCountMap, poduid)
@@ -443,6 +510,8 @@ func ClearQuota(path string) (error) {
 	} else {
 		klog.V(3).Infof("Not clearing quota for pod %s; still %v dirs outstanding", poduid, podDirCountMap[poduid])
 	}
+	delete(dirPodMap, path)
+	delete(dirQuotaMap, path)
 	backingDevLock.Lock()
 	delete(backingDevsMap, path)
 	backingDevLock.Unlock()

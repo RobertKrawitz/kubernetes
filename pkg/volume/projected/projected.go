@@ -203,7 +203,7 @@ func (s *projectedVolumeMounter) SetUpAt(dir string, mounterArgs volume.MounterA
 	}
 
 	setupSuccess := false
-	if err := wrapped.SetUpAt(dir, mounterArgs.fsGroup); err != nil {
+	if err := wrapped.SetUpAt(dir, mounterArgs); err != nil {
 		return err
 	}
 

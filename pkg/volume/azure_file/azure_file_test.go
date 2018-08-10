@@ -155,7 +155,7 @@ func testPlugin(t *testing.T, tmpDir string, volumeHost volume.VolumeHost) {
 		t.Errorf("Got unexpected path: %s", path)
 	}
 
-	if err := mounter.SetUp(nil); err != nil {
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -358,19 +358,19 @@ func TestGetSecretNameAndNamespaceForPV(t *testing.T) {
 func TestAppendDefaultMountOptions(t *testing.T) {
 	tests := []struct {
 		options  []string
-		mounterArgs.FsGroup  *int64
+		FsGroup  *int64
 		expected []string
 	}{
 		{
 			options: []string{"dir_mode=0777"},
-			mounterArgs.FsGroup: nil,
+			FsGroup: nil,
 			expected: []string{"dir_mode=0777",
 				fmt.Sprintf("%s=%s", fileMode, defaultFileMode),
 				fmt.Sprintf("%s=%s", vers, defaultVers)},
 		},
 		{
 			options: []string{"file_mode=0777"},
-			mounterArgs.FsGroup: to.Int64Ptr(0),
+			FsGroup: to.Int64Ptr(0),
 			expected: []string{"file_mode=0777",
 				fmt.Sprintf("%s=%s", dirMode, defaultDirMode),
 				fmt.Sprintf("%s=%s", vers, defaultVers),
@@ -378,7 +378,7 @@ func TestAppendDefaultMountOptions(t *testing.T) {
 		},
 		{
 			options: []string{"vers=2.1"},
-			mounterArgs.FsGroup: to.Int64Ptr(1000),
+			FsGroup: to.Int64Ptr(1000),
 			expected: []string{"vers=2.1",
 				fmt.Sprintf("%s=%s", fileMode, defaultFileMode),
 				fmt.Sprintf("%s=%s", dirMode, defaultDirMode),
@@ -397,7 +397,7 @@ func TestAppendDefaultMountOptions(t *testing.T) {
 		},
 		{
 			options: []string{"gid=2000"},
-			mounterArgs.FsGroup: to.Int64Ptr(1000),
+			FsGroup: to.Int64Ptr(1000),
 			expected: []string{"gid=2000",
 				fmt.Sprintf("%s=%s", fileMode, defaultFileMode),
 				fmt.Sprintf("%s=%s", dirMode, defaultDirMode),
@@ -406,7 +406,7 @@ func TestAppendDefaultMountOptions(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		result := appendDefaultMountOptions(test.options, test.mounterArgs.FsGroup)
+		result := appendDefaultMountOptions(test.options, test.FsGroup)
 		if !reflect.DeepEqual(result, test.expected) {
 			t.Errorf("input: %q, appendDefaultMountOptions result: %q, expected: %q", test.options, result, test.expected)
 		}

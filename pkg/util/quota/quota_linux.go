@@ -242,6 +242,26 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 	return supportsQuotas, err
 }
 
+func getQuotaOnDir(m mount.Interface, path string) (QuotaID, error) {
+	if quotas, _ := SupportsQuotas(m, path); !quotas {
+		return 0, fmt.Errorf("getQuotaOnDir: %s does not support quotas", path)
+	}
+	dir, err := openDir(path)
+	if err != nil {
+		klog.V(3).Infof("Can't open directory %s: %#+v", path, err)
+		return 0, err
+	}
+	defer closeDir(dir)
+	var fsx C.struct_fsxattr
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, getDirFd(dir), C.FS_IOC_FSGETXATTR,
+		uintptr(unsafe.Pointer(&fsx)))
+	if errno != 0 {
+		return 0, fmt.Errorf("Failed to get quota ID for %s: %v", path, errno.Error())
+	}
+	return QuotaID(fsx.fsx_projid), nil
+}
+
+
 func setQuotaOn(path string, id QuotaID, bytes int64) error {
 	klog.V(3).Infof("setQuotaOn %s ID %v bytes %v", path, id, bytes)
 
@@ -330,14 +350,10 @@ func idIsInUse(path string, id QuotaID) bool {
 	var cs = C.CString(backingFsBlockDev)
 	defer C.free(unsafe.Pointer(cs))
 
-	// Merely having a quota assigned is not sufficient to consider
-	// it to be in use.  Until we can persistently store quota IDs,
-	// they won't be cleaned up when the kubelet restarts, and we
-	// eon't want to leak them.
 	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
 		uintptr(unsafe.Pointer(cs)), uintptr(C.__u32(id)),
 		uintptr(unsafe.Pointer(&d)), 0, 0)
-	if errno != 0 || d.d_bcount == 0 {
+	if errno != 0 {
 		return false
 	} else {
 		return true
@@ -471,35 +487,41 @@ func GetInodes(path string) (int64, error) {
 	return inodes, error
 }
 
-// We should recursively clear the quota, but we're only going to delete
-// the directory afterwards.
-func doClearQuota(path string, clearQuota bool) (error) {
-	// If the refcount is going to go to zero, clear the quota
-	if clearQuota {
-		if err := setQuotaOn(path, dirQuotaMap[path], 0); err != nil {
-			klog.V(3).Infof("Unable to clear quota %v %s: %v", dirQuotaMap[path], path, err)
-			return err
-		}
-	}
-	return nil
-}
-
-func ClearQuota(path string) (error) {
+func ClearQuota(m mount.Interface, path string) (error) {
 	klog.V(3).Infof("ClearQuota %s", path)
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
 	poduid, ok := dirPodMap[path]
 	if !ok {
-		return fmt.Errorf("ClearQuota: Cannot find pod for directory %s", path)
+		// Nothing in the map either means that there was no
+		// quota to begin with or that we're clearing a
+		// stale directory, so if we find a quota, just remove it.
+		pid, err := getQuotaOnDir(m, path)
+		if err == nil {
+			// Any error here is real
+			err = setQuotaOn(path, pid, 0)
+			if err != nil {
+				klog.V(3).Infof("Attempt to clear quota failed: %v", err)
+			}
+			return err
+		}
+		// If we couldn't get a quota, that's fine -- there may
+		// never have been one, and we have no way to know otherwise
+		return nil
 	}
 	_, ok = podQuotaMap[poduid]
 	if !ok {
 		return fmt.Errorf("ClearQuota: No quota available for %s", path)
 	}
 	var err error
+	pid, err := getQuotaOnDir(m, path)
+	if pid != dirQuotaMap[path] {
+		klog.V(3).Infof("Expected quota ID %v on dir %s does not match actual", dirQuotaMap[path], path, pid)
+		return fmt.Errorf("Expected quota ID %v on dir %s does not match actual", dirQuotaMap[path], path, pid)
+	}
 	podDirCountMap[poduid]--
 	if podDirCountMap[poduid] == 0 {
-		err := setQuotaOn(path, dirQuotaMap[path], 0)
+		err = setQuotaOn(path, dirQuotaMap[path], 0)
 		if err != nil {
 			klog.V(3).Infof("Unable to clear quota %v %s: %v", dirQuotaMap[path], path, err)
 		}

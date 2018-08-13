@@ -44,5 +44,5 @@ type Interface interface {
 	// Remove the quota from a path
 	// Implementations may assume that any data covered by the
 	// quota has already been removed.
-	ClearQuota(path string, poduid string) (error)
+	ClearQuota(m mount.Interface, path string, poduid string) (error)
 }

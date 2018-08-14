@@ -277,7 +277,6 @@ func (c *csiMountMgr) GetAttributes() volume.Attributes {
 		ReadOnly:        c.readOnly,
 		Managed:         !c.readOnly,
 		SupportsSELinux: supportSelinux,
-		SupportsQuota:   false,
 	}
 }
 

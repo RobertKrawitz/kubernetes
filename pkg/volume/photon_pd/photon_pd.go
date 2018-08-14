@@ -185,7 +185,6 @@ type photonPersistentDiskMounter struct {
 func (b *photonPersistentDiskMounter) GetAttributes() volume.Attributes {
 	return volume.Attributes{
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

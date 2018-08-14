@@ -220,7 +220,6 @@ func (b *azureFileMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        b.readOnly,
 		Managed:         !b.readOnly,
 		SupportsSELinux: false,
-		SupportsQuota:   false,
 	}
 }
 

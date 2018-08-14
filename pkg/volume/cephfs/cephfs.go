@@ -207,7 +207,6 @@ func (cephfsVolume *cephfsMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        cephfsVolume.readonly,
 		Managed:         false,
 		SupportsSELinux: false,
-		SupportsQuota:   false,
 	}
 }
 

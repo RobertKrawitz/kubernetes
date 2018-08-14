@@ -808,7 +808,6 @@ func (b *rbd) GetAttributes() volume.Attributes {
 		ReadOnly:        b.ReadOnly,
 		Managed:         !b.ReadOnly,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

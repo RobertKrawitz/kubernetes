@@ -167,7 +167,6 @@ func (v *sioVolume) GetAttributes() volume.Attributes {
 		ReadOnly:        v.readOnly,
 		Managed:         !v.readOnly,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

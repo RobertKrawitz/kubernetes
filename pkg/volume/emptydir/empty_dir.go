@@ -181,13 +181,10 @@ type emptyDir struct {
 }
 
 func (ed *emptyDir) GetAttributes() volume.Attributes {
-	hasQuotas, _ := quota.SupportsQuotas(ed.mounter, ed.GetPath())
-	klog.V(3).Infof("GetAttributes volume %s supports quotas %v", ed.GetPath(), hasQuotas)
 	return volume.Attributes{
 		ReadOnly:        false,
 		Managed:         true,
 		SupportsSELinux: true,
-		SupportsQuota:   hasQuotas,
 	}
 }
 

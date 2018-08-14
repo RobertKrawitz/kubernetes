@@ -151,7 +151,6 @@ func (d *downwardAPIVolume) GetAttributes() volume.Attributes {
 		ReadOnly:        true,
 		Managed:         true,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

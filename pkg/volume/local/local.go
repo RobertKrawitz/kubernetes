@@ -404,7 +404,6 @@ func (m *localVolumeMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        m.readOnly,
 		Managed:         !m.readOnly,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

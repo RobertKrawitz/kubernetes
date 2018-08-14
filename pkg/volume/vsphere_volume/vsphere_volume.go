@@ -198,7 +198,6 @@ type vsphereVolumeMounter struct {
 func (b *vsphereVolumeMounter) GetAttributes() volume.Attributes {
 	return volume.Attributes{
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 		Managed:         true,
 	}
 }

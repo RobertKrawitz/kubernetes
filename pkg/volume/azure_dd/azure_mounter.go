@@ -54,7 +54,6 @@ func (m *azureDiskMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        readOnly,
 		Managed:         !readOnly,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

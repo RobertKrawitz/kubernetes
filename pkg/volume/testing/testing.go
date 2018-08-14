@@ -571,7 +571,6 @@ func (_ *FakeVolume) GetAttributes() Attributes {
 		ReadOnly:        false,
 		Managed:         true,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

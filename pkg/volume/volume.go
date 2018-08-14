@@ -99,7 +99,6 @@ type Attributes struct {
 	ReadOnly        bool
 	Managed         bool
 	SupportsSELinux bool
-	SupportsQuota   bool
 }
 
 // MounterArgs provides more easily extensible arguments to Mounter

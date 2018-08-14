@@ -316,7 +316,6 @@ func (b *iscsiDiskMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        b.readOnly,
 		Managed:         !b.readOnly,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 }
 

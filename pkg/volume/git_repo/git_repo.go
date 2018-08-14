@@ -165,7 +165,6 @@ func (b *gitRepoVolumeMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        false,
 		Managed:         true,
 		SupportsSELinux: true, // xattr change should be okay, TODO: double check
-		SupportsQuota:   false,
 	}
 }
 

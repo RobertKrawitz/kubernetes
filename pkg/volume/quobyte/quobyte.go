@@ -222,7 +222,6 @@ func (mounter *quobyteMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        mounter.readOnly,
 		Managed:         false,
 		SupportsSELinux: false,
-		SupportsQuota:   false,
 	}
 }
 

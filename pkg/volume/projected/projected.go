@@ -172,7 +172,6 @@ func (sv *projectedVolume) GetAttributes() volume.Attributes {
 		ReadOnly:        true,
 		Managed:         true,
 		SupportsSELinux: true,
-		SupportsQuota:   false,
 	}
 
 }

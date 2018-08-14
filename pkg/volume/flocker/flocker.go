@@ -217,7 +217,6 @@ func (b *flockerVolumeMounter) GetAttributes() volume.Attributes {
 		ReadOnly:        b.readOnly,
 		Managed:         false,
 		SupportsSELinux: false,
-		SupportsQuota:   false,
 	}
 }
 

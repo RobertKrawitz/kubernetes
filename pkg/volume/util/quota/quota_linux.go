@@ -127,7 +127,7 @@ func detectMountpoint(m mount.Interface, path string) (string, error) {
  	if err != nil {
  		return "/", err
  	}
- 	for xpath != "" {
+ 	for xpath != "" && xpath != "/" {
 		isNotMount, err := m.IsNotMountPoint(xpath)
  		if err != nil {
  			return "/", err
@@ -515,8 +515,8 @@ func ClearQuota(m mount.Interface, path string) (error) {
 	var err error
 	pid, err := getQuotaOnDir(m, path)
 	if pid != dirQuotaMap[path] {
-		klog.V(3).Infof("Expected quota ID %v on dir %s does not match actual", dirQuotaMap[path], path, pid)
-		return fmt.Errorf("Expected quota ID %v on dir %s does not match actual", dirQuotaMap[path], path, pid)
+		klog.V(3).Infof("Expected quota ID %v on dir %s does not match actual %v", dirQuotaMap[path], path, pid)
+		return fmt.Errorf("Expected quota ID %v on dir %s does not match actual %v", dirQuotaMap[path], path, pid)
 	}
 	podDirCountMap[poduid]--
 	if podDirCountMap[poduid] == 0 {

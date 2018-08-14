@@ -420,9 +420,7 @@ func IsLocalEphemeralVolume(pod *v1.Pod, volumeName string) (bool, error) {
 func localEphemeralVolumeNames(pod *v1.Pod) []string {
 	result := []string{}
 	for _, volume := range pod.Spec.Volumes {
-		if volume.GitRepo != nil ||
-			(volume.EmptyDir != nil && volume.EmptyDir.Medium != v1.StorageMediumMemory) ||
-			volume.ConfigMap != nil || volume.DownwardAPI != nil {
+		if internalIsLocalEphemeralVolume(pod, volume) {
 			result = append(result, volume.Name)
 		}
 	}

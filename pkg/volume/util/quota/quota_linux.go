@@ -288,7 +288,7 @@ func setQuotaOn(path string, id QuotaID, bytes int64) error {
 		return fmt.Errorf("Failed to set quota limit for ID %d on %s: %v",
 			id, path, errno.Error())
 	}
-	if (bytes > 0) {
+	if bytes > 0 {
 		dir, err := openDir(path)
 		if err != nil {
 			return err

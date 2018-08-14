@@ -358,19 +358,19 @@ func TestGetSecretNameAndNamespaceForPV(t *testing.T) {
 func TestAppendDefaultMountOptions(t *testing.T) {
 	tests := []struct {
 		options  []string
-		FsGroup  *int64
+		fsGroup  *int64
 		expected []string
 	}{
 		{
 			options: []string{"dir_mode=0777"},
-			FsGroup: nil,
+			fsGroup: nil,
 			expected: []string{"dir_mode=0777",
 				fmt.Sprintf("%s=%s", fileMode, defaultFileMode),
 				fmt.Sprintf("%s=%s", vers, defaultVers)},
 		},
 		{
 			options: []string{"file_mode=0777"},
-			FsGroup: to.Int64Ptr(0),
+			fsGroup: to.Int64Ptr(0),
 			expected: []string{"file_mode=0777",
 				fmt.Sprintf("%s=%s", dirMode, defaultDirMode),
 				fmt.Sprintf("%s=%s", vers, defaultVers),
@@ -378,7 +378,7 @@ func TestAppendDefaultMountOptions(t *testing.T) {
 		},
 		{
 			options: []string{"vers=2.1"},
-			FsGroup: to.Int64Ptr(1000),
+			fsGroup: to.Int64Ptr(1000),
 			expected: []string{"vers=2.1",
 				fmt.Sprintf("%s=%s", fileMode, defaultFileMode),
 				fmt.Sprintf("%s=%s", dirMode, defaultDirMode),
@@ -397,7 +397,7 @@ func TestAppendDefaultMountOptions(t *testing.T) {
 		},
 		{
 			options: []string{"gid=2000"},
-			FsGroup: to.Int64Ptr(1000),
+			fsGroup: to.Int64Ptr(1000),
 			expected: []string{"gid=2000",
 				fmt.Sprintf("%s=%s", fileMode, defaultFileMode),
 				fmt.Sprintf("%s=%s", dirMode, defaultDirMode),
@@ -406,7 +406,7 @@ func TestAppendDefaultMountOptions(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		result := appendDefaultMountOptions(test.options, test.FsGroup)
+		result := appendDefaultMountOptions(test.options, test.fsGroup)
 		if !reflect.DeepEqual(result, test.expected) {
 			t.Errorf("input: %q, appendDefaultMountOptions result: %q, expected: %q", test.options, result, test.expected)
 		}

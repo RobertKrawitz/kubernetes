@@ -240,10 +240,10 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	if err == nil {
 		volumeutil.SetReady(ed.getMetaDir())
 	}
-	if (mounterArgs.DesiredSize != 0) {
+	if mounterArgs.DesiredSize != 0 {
 		if hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir); hasQuotas  {
 			var desiredQuota int64
-			if (mounterArgs.DesiredSize < 0) {
+			if mounterArgs.DesiredSize < 0 {
 				desiredQuota = maxInt // Monitoring only
 			} else {
 				desiredQuota = mounterArgs.DesiredSize // Enforcement

@@ -240,6 +240,9 @@ func (dsw *desiredStateOfWorld) AddPodToVolume(
 			_, podLimits := apiv1resource.PodRequestsAndLimits(pod)
 			ephemeralStorageLimit := podLimits[v1.ResourceEphemeralStorage]
 			sizeLimit = ephemeralStorageLimit.Value()
+			if sizeLimit == 0 {
+				sizeLimit = -1
+			}
 		}
 		dsw.volumesToMount[volumeName] = volumeToMount{
 			volumeName:              volumeName,

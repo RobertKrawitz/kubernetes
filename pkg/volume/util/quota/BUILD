@@ -8,7 +8,7 @@ go_library(
         "quota_unsupported.go",
     ],
     cgo = True,
-    importpath = "k8s.io/kubernetes/pkg/util/quota",
+    importpath = "k8s.io/kubernetes/pkg/volume/util/quota",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/util/mount:go_default_library",

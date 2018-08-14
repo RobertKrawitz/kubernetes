@@ -133,7 +133,6 @@ func detectMountpoint(m mount.Interface, path string) (string, error) {
  			return "/", err
  		}
  		if !isNotMount {
-			klog.V(3).Infof("getMountpoint %s found! %s", path, xpath)
 			return xpath, nil
  		}
  		xpath = filepath.Dir(xpath)

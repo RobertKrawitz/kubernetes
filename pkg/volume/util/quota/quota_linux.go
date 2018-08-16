@@ -21,66 +21,251 @@ package quota
 import (
 	"fmt"
 	"sync"
+	"regexp"
+	"os"
+	"bufio"
+	"path/filepath"
+	"strconv"
 
 	"k8s.io/klog"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/kubernetes/pkg/util/mount"
-	"k8s.io/kubernetes/pkg/volume/util/quota/util"
+	"k8s.io/kubernetes/pkg/volume/util/quota/common"
 	"k8s.io/kubernetes/pkg/volume/util/quota/xfs"
 )
 
 // Pod -> ID
-var podQuotaMap = make(map[string]quotaUtils.QuotaID)
+var podQuotaMap = make(map[string]common.QuotaID)
 
 // Dir -> ID (for convenience)
-var dirQuotaMap = make(map[string]quotaUtils.QuotaID)
+var dirQuotaMap = make(map[string]common.QuotaID)
 
 // ID -> pod
-var quotaPodMap = make(map[quotaUtils.QuotaID]string)
+var quotaPodMap = make(map[common.QuotaID]string)
 
 // Directory -> pod
 var dirPodMap = make(map[string]string)
+
+// Backing device -> applier
+// This is *not* cleaned up; its size will be bounded.
+var devApplierMap = make(map[string]common.LinuxVolumeQuotaApplier)
+
+// Directory -> applier
+var dirApplierMap = make(map[string]common.LinuxVolumeQuotaApplier)
 
 // Pod -> refcount
 var podDirCountMap = make(map[string]int)
 
 // ID -> size
-var quotaSizeMap = make(map[quotaUtils.QuotaID]int64)
+var quotaSizeMap = make(map[common.QuotaID]int64)
 var quotaLock sync.RWMutex
 
 var supportsQuotasMap = make(map[string]bool)
 var supportsQuotasLock sync.RWMutex
 
+var mountParseRegexp *regexp.Regexp = regexp.MustCompile("^(/[^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
+
+var projectsParseRegexp *regexp.Regexp = regexp.MustCompile("^([0123456789][0123456789]*):")
+var projidParseRegexp *regexp.Regexp = regexp.MustCompile("^[^:#][^:#]*:([0123456789][0123456789]*)")
+
+// Directory -> backingDev
+var backingDevMap = make(map[string]string)
+var backingDevLock sync.RWMutex
+
+var mountpointMap = make(map[string]string)
+var mountpointLock sync.RWMutex
+
 const (
-	// XXXXXXX Need a better way of doing this...
-	firstQuota quotaUtils.QuotaID = 1048577
+	mountsFile = "/proc/self/mounts"
+	projectsFile = "/etc/projects"
+	projidFile = "/etc/projid"
 )
 
-func idIsInUse(path string, id quotaUtils.QuotaID) (bool, error) {
+var providers = []common.LinuxVolumeQuotaProvider{
+	&xfs.VolumeProvider{},
+}
+
+func detectBackingDev(m mount.Interface, mountpoint string) (string, error) {
+	file, err := os.Open(mountsFile)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		match := mountParseRegexp.FindStringSubmatch(scanner.Text())
+		if match != nil {
+			device := match[1]
+			mount := match[2]
+			if mount == mountpoint {
+				return device, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("couldn't find backing device for %s", mountpoint)
+}
+
+// GetBackingDev returns the mount point for the specified path
+// It assumes that we already know the backing device for the path.
+func GetBackingDev(path string) (string, error) {
+	backingDevLock.Lock()
+	defer backingDevLock.Unlock()
+	if backingDev, ok := backingDevMap[path]; ok {
+		return backingDev, nil
+	}
+	return "/", fmt.Errorf("Backing device not found for %s", path);
+}
+
+func clearBackingDev(path string) {
+	backingDevLock.Lock()
+	defer backingDevLock.Unlock()
+	delete(backingDevMap, path)
+}
+
+func detectMountpoint(m mount.Interface, path string) (string, error) {
+	xpath, err := filepath.Abs(path)
+ 	if err != nil {
+		return "/", err
+ 	}
+	xpath, err = filepath.EvalSymlinks(xpath)
+ 	if err != nil {
+		return "/", err
+ 	}
+ 	for xpath != "" && xpath != "/" {
+		// per pkg/util/mount/mount_linux this detects all but
+		// a bind mount from one part of a mount to another.
+		// For our purposes that's fine; we simply want the "true"
+		// mount point
+		//
+		// IsNotMountPoint proved much more troublesome; it actually
+		// scans the mounts, and when a lot of mount/unmount
+		// activity takes place, it is not able to get a consistent
+		// view of /proc/self/mounts, causing it to time out and
+		// report incorrectly.
+		isNotMount, err := m.IsLikelyNotMountPoint(xpath)
+ 		if err != nil {
+			return "/", err
+ 		}
+ 		if !isNotMount {
+			return xpath, nil
+ 		}
+ 		xpath = filepath.Dir(xpath)
+	}
+	return "/", nil
+}
+
+// GetMountpoint returns the mount point for the specified path
+// It assumes that we already know the mountpoint for the path.
+func GetMountpoint(path string) (string, error) {
+	mountpointLock.Lock()
+	defer mountpointLock.Unlock()
+	if mountpoint, ok := mountpointMap[path]; ok {
+		return mountpoint, nil
+	}
+	return "/", fmt.Errorf("Backing device not found for %s", path);
+}
+
+func clearMountpoint(path string) {
+	mountpointLock.Lock()
+	defer mountpointLock.Unlock()
+	delete(mountpointMap, path)
+}
+
+// getFSInfo Returns mountpoint and backing device
+// getFSInfo should cache the mountpoint and backing device for the
+// path.
+func getFSInfo(m mount.Interface, path string) (string, string, error) {
+	mountpointLock.Lock()
+	defer mountpointLock.Unlock()
+
+	backingDevLock.Lock()
+	defer backingDevLock.Unlock()
+
+	var err error
+
+	mountpoint, okMountpoint := mountpointMap[path]
+	if !okMountpoint {
+		mountpoint, err = detectMountpoint(m, path)
+		klog.V(3).Infof("Mountpoint %s -> %s (%v)", path, mountpoint, err)
+		if err != nil {
+			return "", "", err
+		}
+		mountpointMap[path] = mountpoint
+	}
+
+	backingDev, okBackingDev := backingDevMap[path]
+	if !okBackingDev {
+		backingDev, err = detectBackingDev(m, mountpoint)
+		klog.V(3).Infof("Backing dev %s -> %s (%v)", path, backingDev, err)
+		if err != nil{
+			return "", "", err
+		}
+		backingDevMap[path] = backingDev
+	}
+	return mountpoint, backingDev, nil
+}
+
+func clearFSInfo(path string) {
+	clearMountpoint(path)
+	clearBackingDev(path)
+}
+
+func projectIsPresentInFile(id common.QuotaID, file string, re *regexp.Regexp) bool {
+	fd, err := os.Open(file)
+	if err != nil {
+		return false
+	}
+	defer fd.Close()
+	scanner := bufio.NewScanner(fd)
+	for scanner.Scan() {
+		match := re.FindStringSubmatch(scanner.Text())
+		if match != nil {
+			pid := match[1]
+			if i, err := strconv.Atoi(pid); err == nil && int(id) == i {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// projectisknown -- project is known to the system (in /etc/project,
+// /etc/projid, or similar)
+func projectIsKnown(id common.QuotaID) bool {
+	return projectIsPresentInFile(id, projectsFile, projectsParseRegexp) ||
+		projectIsPresentInFile(id, projidFile, projidParseRegexp)
+}
+
+func idIsInUse(path string, id common.QuotaID) (bool, error) {
 	// First check /etc/project and /etc/projid to see if project
 	// is listed; if it is we consider it in use.
-	if quotaUtils.ProjectIsKnown(id) {
-		return true, nil
-	} else {
-		isInUse, err := quotaXfs.QuotaIDIsInUse(path, id)
+	if !projectIsKnown(id) {
+		isInUse, err := dirApplierMap[path].QuotaIDIsInUse(path, id)
 		return isInUse, err
 	}
+	return true, nil
 }
 
-func setQuotaOnDir(path string, id quotaUtils.QuotaID, bytes int64) error {
-	return quotaXfs.SetQuotaOnDir(path, id, bytes)
+func setQuotaOnDir(path string, id common.QuotaID, bytes int64) error {
+	return dirApplierMap[path].SetQuotaOnDir(path, id, bytes)
 }
 
-func getQuotaOnDir(m mount.Interface, path string) (quotaUtils.QuotaID, error) {
-	_, _, err := quotaUtils.GetFSInfo(m, path)
+func getQuotaOnDir(m mount.Interface, path string) (common.QuotaID, error) {
+	_, _, err := getFSInfo(m, path)
 	if err != nil {
-		return quotaUtils.BadQuotaID, err
+		return common.BadQuotaID, err
 	}
-	id, err := quotaXfs.GetQuotaOnDir(path)
+	id, err := dirApplierMap[path].GetQuotaOnDir(path)
 	return id, err
 }
 
 func clearQuotaOnDir(m mount.Interface, path string) error {
+	// Since we may be called without path being in the map,
+	// we excplicitly have to check in this case.
+	supportsQuotas, err := SupportsQuotas(m, path)
+	if !supportsQuotas {
+		return nil
+	}
 	projid, err := getQuotaOnDir(m, path)
 	if err == nil {
 		// This means that we have a quota on the directory but
@@ -91,29 +276,45 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 		}
 		return err
 	}
-	quotaUtils.ClearFSInfo(path)
+	clearFSInfo(path)
 	// If we couldn't get a quota, that's fine -- there may
 	// never have been one, and we have no way to know otherwise
 	return nil
 }
 
 // SupportsQuotas -- Does the path support quotas
+// Cache the applier for paths that support quotas.  For paths that don't,
+// don't cache the result because nothing will clean it up.
+// However, do cache the device->applier map; the number of devices
+// is bounded.
 func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 	supportsQuotasLock.Lock()
 	defer supportsQuotasLock.Unlock()
 	if supportsQuotas, ok := supportsQuotasMap[path]; ok {
 		return supportsQuotas, nil
 	}
-	mount, dev, err := quotaUtils.GetFSInfo(m, path)
+	mount, dev, err := getFSInfo(m, path)
 	klog.V(3).Infof("SupportsQuotas %s -> mount %s dev %s %v", path, mount, dev, err)
 	if err != nil {
-		supportsQuotasMap[path] = false
 		return false, err
 	}
-	supportsQuotas, err := quotaXfs.SupportsQuotas(dev)
-	supportsQuotasMap[path] = supportsQuotas
-	klog.V(3).Infof("      SupportsQuotas -> %v", supportsQuotas)
-	return supportsQuotas, err
+	// Do we know about this device?
+	applier, ok := devApplierMap[path]
+	if ok {
+		if applier != nil {
+			dirApplierMap[path] = applier
+		}
+		return applier != nil, nil
+	}		
+	for _, provider := range providers {
+		applier = provider.GetQuotaApplier(dev)
+		if applier != nil {
+			supportsQuotasMap[path] = true
+			dirApplierMap[path] = applier
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // AssignQuota -- assign a quota to the specified directory.
@@ -133,7 +334,7 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 	// If and when we decide permanently that we're going to adop
 	// one quota per volume, we can rip all of the pod code out.
 	poduid = string(uuid.NewUUID())
-kklog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", poduid, path)
+	klog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", poduid, path)
 	pod, ok := dirPodMap[path]
 	if ok {
 		if pod != poduid {
@@ -152,7 +353,7 @@ kklog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", podui
 		}
 		return err
 	}
-	for id := firstQuota; id == id; id++ {
+	for id := common.FirstQuota; id == id; id++ {
 		if _, ok := quotaPodMap[id]; ok {
 			continue
 		}
@@ -189,11 +390,11 @@ func GetConsumption(path string) (int64, error) {
 	// running the quota command, so it can't get recycled behind our back
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
-	id, ok := dirQuotaMap[path]
-	if !ok {
+	applier := dirApplierMap[path]
+	if applier == nil {
 		return 0, fmt.Errorf("No quota available for %s", path)
 	}
-	size, error := quotaXfs.GetConsumption(path, id)
+	size, error := applier.GetConsumption(path, dirQuotaMap[path])
 	return size, error
 }
 
@@ -203,11 +404,11 @@ func GetInodes(path string) (int64, error) {
 	// running the quota command, so it can't get recycled behind our back
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
-	id, ok := dirQuotaMap[path]
-	if !ok {
+	applier := dirApplierMap[path]
+	if applier == nil {
 		return 0, fmt.Errorf("No quota available for %s", path)
 	}
-	inodes, error := quotaXfs.GetInodes(path, id)
+	inodes, error := applier.GetInodes(path, dirQuotaMap[path])
 	return inodes, error
 }
 
@@ -248,5 +449,6 @@ func ClearQuota(m mount.Interface, path string) error {
 	}
 	delete(dirPodMap, path)
 	delete(dirQuotaMap, path)
+	delete(dirApplierMap, path)
 	return err
 }

@@ -7,15 +7,15 @@ go_library(
         "quota_linux.go",
         "quota_unsupported.go",
     ],
-    cgo = True,
     importpath = "k8s.io/kubernetes/pkg/volume/util/quota",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/util/mount:go_default_library",
     ] + select({
         "@io_bazel_rules_go//go/platform:linux": [
+            "//pkg/volume/util/quota/common:go_default_library",
+            "//pkg/volume/util/quota/xfs:go_default_library",
             "//staging/src/k8s.io/apimachinery/pkg/util/uuid:go_default_library",
-            "//vendor/golang.org/x/sys/unix:go_default_library",
             "//vendor/k8s.io/klog:go_default_library",
         ],
         "//conditions:default": [],
@@ -31,7 +31,11 @@ filegroup(
 
 filegroup(
     name = "all-srcs",
-    srcs = [":package-srcs"],
+    srcs = [
+        ":package-srcs",
+        "//pkg/volume/util/quota/common:all-srcs",
+        "//pkg/volume/util/quota/xfs:all-srcs",
+    ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],
 )

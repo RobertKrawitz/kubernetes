@@ -16,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package quotaXfs
+package xfs
 
 /*
 #include <stdlib.h>
@@ -66,8 +66,30 @@ import (
 
 	"golang.org/x/sys/unix"
 	"k8s.io/klog"
-	"k8s.io/kubernetes/pkg/volume/util/quota/util"
+	"k8s.io/kubernetes/pkg/volume/util/quota/common"
 )
+
+// VolumeProvider supplies a quota applier to the generic code.
+type VolumeProvider struct {
+}
+
+// GetQuotaApplier -- does this backing device support quotas that
+// can be applied to directories?
+func (*VolumeProvider) GetQuotaApplier(backingDev string) common.LinuxVolumeQuotaApplier {
+	// For now, we're only going to do quotas on XFS
+	var qstat C.fs_quota_stat_t
+
+	// And this is an XFS-specific quota call
+	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, uintptr(C.Q_XGETQSTAT_PRJQUOTA), uintptr(unsafe.Pointer(C.CString(backingDev))), 0, uintptr(unsafe.Pointer(&qstat)), 0, 0)
+	if errno == 0 && qstat.qs_flags&C.FS_QUOTA_PDQ_ENFD > 0 && qstat.qs_flags&C.FS_QUOTA_PDQ_ACCT > 0 {
+		return xfsVolumeQuota{backingDev}
+	}
+	return nil
+}
+
+type xfsVolumeQuota struct {
+	backingDev string
+}
 
 const (
 	linuxXfsMagic = 0x58465342
@@ -103,49 +125,29 @@ func getDirFd(dir *C.DIR) uintptr {
 	return uintptr(C.dirfd(dir))
 }
 
-// SupportsQuotas -- does this backing device support quotas that
-// can be applied to directories?
-func SupportsQuotas(backingDev string) (bool, error) {
-	// For now, we're only going to do quotas on XFS
-	var qstat C.fs_quota_stat_t
-
-	// And this is an XFS-specific quota call
-	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, uintptr(C.Q_XGETQSTAT_PRJQUOTA), uintptr(unsafe.Pointer(C.CString(backingDev))), 0, uintptr(unsafe.Pointer(&qstat)), 0, 0)
-	if errno == 0 {
-		return qstat.qs_flags&C.FS_QUOTA_PDQ_ENFD > 0 && qstat.qs_flags&C.FS_QUOTA_PDQ_ACCT > 0, nil
-	}
-	klog.V(3).Infof("detectSupportQuota %s FAILED %v", backingDev, errno)
-	return false, errno
-}
-
 // GetQuotaOnDir -- get the quota ID that applies to this directory.
-func GetQuotaOnDir(path string) (quotaUtils.QuotaID, error) {
+func (v xfsVolumeQuota) GetQuotaOnDir(path string) (common.QuotaID, error) {
 	dir, err := openDir(path)
 	if err != nil {
 		klog.V(3).Infof("Can't open directory %s: %#+v", path, err)
-		return quotaUtils.BadQuotaID, err
+		return common.BadQuotaID, err
 	}
 	defer closeDir(dir)
 	var fsx C.struct_fsxattr
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, getDirFd(dir), C.FS_IOC_FSGETXATTR,
 		uintptr(unsafe.Pointer(&fsx)))
 	if errno != 0 {
-		return quotaUtils.BadQuotaID, fmt.Errorf("Failed to get quota ID for %s: %v", path, errno.Error())
+		return common.BadQuotaID, fmt.Errorf("Failed to get quota ID for %s: %v", path, errno.Error())
 	}
-	return quotaUtils.QuotaID(fsx.fsx_projid), nil
+	return common.QuotaID(fsx.fsx_projid), nil
 }
 
 // ASetQuotaOnDir -- npply the specified quota to the directory.  If
 // bytes is not greater than zero, the quota should be applied in a
 // way that is non-enforcing (either explicitly so or by setting a
 // quota larger than anything the user may possibly create)
-func SetQuotaOnDir(path string, id quotaUtils.QuotaID, bytes int64) error {
+func (v xfsVolumeQuota) SetQuotaOnDir(path string, id common.QuotaID, bytes int64) error {
 	klog.V(3).Infof("xfsSetQuotaOn %s ID %v bytes %v", path, id, bytes)
-
-	backingFsBlockDev, ok := quotaUtils.GetBackingDev(path)
-	if ok != nil {
-		return fmt.Errorf("Cannot find backing device for %s", path)
-	}
 
 	if bytes < 0 {
 		bytes = maxInt
@@ -160,7 +162,7 @@ func SetQuotaOnDir(path string, id quotaUtils.QuotaID, bytes int64) error {
 	d.d_blk_hardlimit = C.__u64(bytes / 512)
 	d.d_blk_softlimit = d.d_blk_hardlimit
 
-	var cs = C.CString(backingFsBlockDev)
+	var cs = C.CString(v.backingDev)
 	defer C.free(unsafe.Pointer(cs))
 
 	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XSETPQLIM,
@@ -192,18 +194,12 @@ func SetQuotaOnDir(path string, id quotaUtils.QuotaID, bytes int64) error {
 	return nil
 }
 
-// QuotaIDIsInUse -- determine whether the quota ID is already in
+// common.QuotaIDIsInUse -- determine whether the quota ID is already in
 // use.
-func QuotaIDIsInUse(path string, id quotaUtils.QuotaID) (bool, error) {
-	backingFsBlockDev, err := quotaUtils.GetBackingDev(path)
-	if err != nil {
-		// If GetBackingDev fails once, it will fail for any other project ID
-		return false, err
-	}
-
+func (v xfsVolumeQuota) QuotaIDIsInUse(path string, id common.QuotaID) (bool, error) {
 	var d C.fs_disk_quota_t
 
-	var cs = C.CString(backingFsBlockDev)
+	var cs = C.CString(v.backingDev)
 	defer C.free(unsafe.Pointer(cs))
 
 	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
@@ -212,14 +208,10 @@ func QuotaIDIsInUse(path string, id quotaUtils.QuotaID) (bool, error) {
 	return errno == 0, nil
 }
 
-func getConsumptionInternal(path string, id quotaUtils.QuotaID, typearg string) (int64, error) {
-	backingFsBlockDev, err := quotaUtils.GetBackingDev(path)
-	if err != nil {
-		return 0, fmt.Errorf("Cannot find backing device for %s", path)
-	}
+func (v xfsVolumeQuota) getConsumptionInternal(path string, id common.QuotaID, typearg string) (int64, error) {
 	var d C.fs_disk_quota_t
 
-	var cs = C.CString(backingFsBlockDev)
+	var cs = C.CString(v.backingDev)
 	defer C.free(unsafe.Pointer(cs))
 
 	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
@@ -243,13 +235,13 @@ func getConsumptionInternal(path string, id quotaUtils.QuotaID, typearg string) 
 }
 
 // GetConsumption -- retrieve the consumption (in bytes) of the directory
-func GetConsumption(path string, id quotaUtils.QuotaID) (int64, error) {
-	inodes, err := getConsumptionInternal(path, id, "b")
+func (v xfsVolumeQuota) GetConsumption(path string, id common.QuotaID) (int64, error) {
+	inodes, err := v.getConsumptionInternal(path, id, "b")
 	return inodes, err
 }
 
 // GetInodes -- retrieve the number of inodes in use under the directory
-func GetInodes(path string, id quotaUtils.QuotaID) (int64, error) {
-	inodes, err := getConsumptionInternal(path, id, "i")
+func (v xfsVolumeQuota) GetInodes(path string, id common.QuotaID) (int64, error) {
+	inodes, err := v.getConsumptionInternal(path, id, "i")
 	return inodes, err
 }

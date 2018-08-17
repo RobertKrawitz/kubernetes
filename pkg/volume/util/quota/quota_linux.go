@@ -19,13 +19,13 @@ limitations under the License.
 package quota
 
 import (
-	"fmt"
-	"sync"
-	"regexp"
-	"os"
 	"bufio"
+	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"sync"
 
 	"k8s.io/klog"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -63,7 +63,7 @@ var quotaLock sync.RWMutex
 var supportsQuotasMap = make(map[string]bool)
 var supportsQuotasLock sync.RWMutex
 
-var mountParseRegexp *regexp.Regexp = regexp.MustCompile("^(/[^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
+var mountParseRegexp *regexp.Regexp = regexp.MustCompile("^([^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
 
 var projectsParseRegexp *regexp.Regexp = regexp.MustCompile("^([0123456789][0123456789]*):")
 var projidParseRegexp *regexp.Regexp = regexp.MustCompile("^[^:#][^:#]*:([0123456789][0123456789]*)")
@@ -76,17 +76,18 @@ var mountpointMap = make(map[string]string)
 var mountpointLock sync.RWMutex
 
 const (
-	mountsFile = "/proc/self/mounts"
+	mountsFile   = "/proc/self/mounts"
 	projectsFile = "/etc/projects"
-	projidFile = "/etc/projid"
+	projidFile   = "/etc/projid"
 )
 
 var providers = []common.LinuxVolumeQuotaProvider{
 	&xfs.VolumeProvider{},
 }
 
-func detectBackingDev(m mount.Interface, mountpoint string) (string, error) {
-	file, err := os.Open(mountsFile)
+// Separate the innards for ease of testing
+func detectBackingDevInternal(mountpoint string, mounts string) (string, error) {
+	file, err := os.Open(mounts)
 	if err != nil {
 		return "", err
 	}
@@ -105,6 +106,12 @@ func detectBackingDev(m mount.Interface, mountpoint string) (string, error) {
 	return "", fmt.Errorf("couldn't find backing device for %s", mountpoint)
 }
 
+// detectBackingDev assumes that the mount point provided is valid
+func detectBackingDev(_ mount.Interface, mountpoint string) (string, error) {
+	dev, err := detectBackingDevInternal(mountpoint, mountsFile)
+	return dev, err
+}
+
 // GetBackingDev returns the mount point for the specified path
 // It assumes that we already know the backing device for the path.
 func GetBackingDev(path string) (string, error) {
@@ -113,7 +120,7 @@ func GetBackingDev(path string) (string, error) {
 	if backingDev, ok := backingDevMap[path]; ok {
 		return backingDev, nil
 	}
-	return "/", fmt.Errorf("Backing device not found for %s", path);
+	return "/", fmt.Errorf("Backing device not found for %s", path)
 }
 
 func clearBackingDev(path string) {
@@ -122,16 +129,10 @@ func clearBackingDev(path string) {
 	delete(backingDevMap, path)
 }
 
-func detectMountpoint(m mount.Interface, path string) (string, error) {
-	xpath, err := filepath.Abs(path)
- 	if err != nil {
-		return "/", err
- 	}
-	xpath, err = filepath.EvalSymlinks(xpath)
- 	if err != nil {
-		return "/", err
- 	}
- 	for xpath != "" && xpath != "/" {
+// Assumes that the path has been fully canonicalized
+// Breaking this up helps with testingxs
+func detectMountpointInternal(m mount.Interface, path string) (string, error) {
+	for path != "" && path != "/" {
 		// per pkg/util/mount/mount_linux this detects all but
 		// a bind mount from one part of a mount to another.
 		// For our purposes that's fine; we simply want the "true"
@@ -142,16 +143,29 @@ func detectMountpoint(m mount.Interface, path string) (string, error) {
 		// activity takes place, it is not able to get a consistent
 		// view of /proc/self/mounts, causing it to time out and
 		// report incorrectly.
-		isNotMount, err := m.IsLikelyNotMountPoint(xpath)
- 		if err != nil {
+		isNotMount, err := m.IsLikelyNotMountPoint(path)
+		if err != nil {
 			return "/", err
- 		}
- 		if !isNotMount {
-			return xpath, nil
- 		}
- 		xpath = filepath.Dir(xpath)
+		}
+		if !isNotMount {
+			return path, nil
+		}
+		path = filepath.Dir(path)
 	}
 	return "/", nil
+}
+
+func detectMountpoint(m mount.Interface, path string) (string, error) {
+	xpath, err := filepath.Abs(path)
+	if err != nil {
+		return "/", err
+	}
+	xpath, err = filepath.EvalSymlinks(xpath)
+	if err != nil {
+		return "/", err
+	}
+	xpath, err = detectMountpointInternal(m, xpath)
+	return xpath, err
 }
 
 // GetMountpoint returns the mount point for the specified path
@@ -162,7 +176,7 @@ func GetMountpoint(path string) (string, error) {
 	if mountpoint, ok := mountpointMap[path]; ok {
 		return mountpoint, nil
 	}
-	return "/", fmt.Errorf("Backing device not found for %s", path);
+	return "/", fmt.Errorf("Backing device not found for %s", path)
 }
 
 func clearMountpoint(path string) {
@@ -197,7 +211,7 @@ func getFSInfo(m mount.Interface, path string) (string, string, error) {
 	if !okBackingDev {
 		backingDev, err = detectBackingDev(m, mountpoint)
 		klog.V(3).Infof("Backing dev %s -> %s (%v)", path, backingDev, err)
-		if err != nil{
+		if err != nil {
 			return "", "", err
 		}
 		backingDevMap[path] = backingDev
@@ -305,7 +319,7 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 			dirApplierMap[path] = applier
 		}
 		return applier != nil, nil
-	}		
+	}
 	for _, provider := range providers {
 		applier = provider.GetQuotaApplier(dev)
 		if applier != nil {
@@ -315,6 +329,23 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func findAvailableQuotaID(path string) (common.QuotaID, error) {
+	for id := common.FirstQuota; id == id; id++ {
+		if _, ok := quotaPodMap[id]; ok {
+			continue
+		}
+		isInUse, err := idIsInUse(path, id)
+		if err != nil {
+			return common.BadQuotaID, err
+		} else if isInUse {
+			klog.V(3).Infof("Project ID %v is in use, trying again", id)
+			continue
+		}
+		return id, nil
+	}
+	return common.BadQuotaID, fmt.Errorf("Can't find available quota ID")
 }
 
 // AssignQuota -- assign a quota to the specified directory.
@@ -353,35 +384,26 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 		}
 		return err
 	}
-	for id := common.FirstQuota; id == id; id++ {
-		if _, ok := quotaPodMap[id]; ok {
-			continue
-		}
-		isInUse, err := idIsInUse(path, id)
-		if err != nil {
-			return err
-		} else if isInUse {
-			klog.V(3).Infof("Project ID %v is in use, trying again", id)
-			continue
-		}
-		err = setQuotaOnDir(path, id, bytes)
-		if err != nil {
-			klog.V(3).Infof("Assign quota FAILED %v", err)
-			return err
-		}
-		quotaPodMap[id] = poduid
-		quotaSizeMap[id] = bytes
-		podQuotaMap[poduid] = id
-		dirQuotaMap[path] = id
-		dirPodMap[path] = poduid
-		if count, ok := podDirCountMap[poduid]; ok {
-			podDirCountMap[poduid] = count + 1
-		} else {
-			podDirCountMap[poduid] = 1
-		}
-		return nil
+	id, err = findAvailableQuotaID(path)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("Unable to find a quota ID for %s", path)
+	err = setQuotaOnDir(path, id, bytes)
+	if err != nil {
+		klog.V(3).Infof("Assign quota FAILED %v", err)
+		return err
+	}
+	quotaPodMap[id] = poduid
+	quotaSizeMap[id] = bytes
+	podQuotaMap[poduid] = id
+	dirQuotaMap[path] = id
+	dirPodMap[path] = poduid
+	if count, ok := podDirCountMap[poduid]; ok {
+		podDirCountMap[poduid] = count + 1
+	} else {
+		podDirCountMap[poduid] = 1
+	}
+	return nil
 }
 
 // GetConsumption -- retrieve the consumption (in bytes) of the directory

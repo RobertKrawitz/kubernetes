@@ -1,4 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "go_default_library",
@@ -17,6 +17,18 @@ go_library(
             "//pkg/volume/util/quota/xfs:go_default_library",
             "//staging/src/k8s.io/apimachinery/pkg/util/uuid:go_default_library",
             "//vendor/k8s.io/klog:go_default_library",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+go_test(
+    name = "go_default_test",
+    srcs = ["quota_linux_test.go"],
+    embed = [":go_default_library"],
+    deps = select({
+        "@io_bazel_rules_go//go/platform:linux": [
+            "//pkg/util/mount:go_default_library",
         ],
         "//conditions:default": [],
     }),

@@ -32,6 +32,7 @@ import (
 	stringsutil "k8s.io/kubernetes/pkg/util/strings"
 	"k8s.io/kubernetes/pkg/volume"
 	volumeutil "k8s.io/kubernetes/pkg/volume/util"
+	"k8s.io/kubernetes/pkg/volume/util/quota"
 )
 
 // TODO: in the near future, this will be changed to be more restrictive
@@ -39,11 +40,7 @@ import (
 // from the group attribute.
 //
 // http://issue.k8s.io/2630
-const (
-	bitsPerWord = 32 << (^uint(0) >> 63) // either 32 or 64
-	maxInt int64 = 1 << (bitsPerWord - 1) - 1 // either 1<<31 - 1 or 1<<63 - 1
-	perm os.FileMode = 0777
-)
+const perm os.FileMode = 0777
 
 // ProbeVolumePlugins is the primary entrypoint for volume plugins.
 func ProbeVolumePlugins() []volume.VolumePlugin {
@@ -176,7 +173,6 @@ type emptyDir struct {
 	mountDetector mountDetector
 	plugin        *emptyDirPlugin
 	desiredSize   int64
-	quotaID       quota.QuotaID
 	volume.MetricsProvider
 }
 
@@ -238,19 +234,11 @@ func (ed *emptyDir) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 		volumeutil.SetReady(ed.getMetaDir())
 	}
 	if mounterArgs.DesiredSize != 0 {
-		if hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir); hasQuotas  {
-			var desiredQuota int64
-			if mounterArgs.DesiredSize < 0 {
-				desiredQuota = maxInt // Monitoring only
-			} else {
-				desiredQuota = mounterArgs.DesiredSize // Enforcement
-			}
-			// We will need this at some point...
-			quotaID, err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, desiredQuota)
+		if hasQuotas, _ := quota.SupportsQuotas(ed.mounter, dir); hasQuotas {
+			klog.V(3).Infof("emptydir trying to assign quota")
+			err := quota.AssignQuota(ed.mounter, dir, mounterArgs.PodUID, mounterArgs.DesiredSize)
 			if err != nil {
 				klog.V(3).Infof("Set quota failed %v", err)
-			} else {
-				ed.quotaID = quotaID
 			}
 		}
 	}

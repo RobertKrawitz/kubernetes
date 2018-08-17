@@ -20,20 +20,13 @@ import (
 	"k8s.io/kubernetes/pkg/util/mount"
 )
 
-type QuotaID int32
-
-const (
-	BadQuota QuotaID = 0
-)
-
+// Interface -- quota interface
 type Interface interface {
 	// Does the path provided support quotas, and if so, what types
 	SupportsQuotas(m mount.Interface, path string) (bool, error)
 	// Assign a quota (picked by the quota mechanism) to a path,
 	// and return it.
-	AssignQuota(m mount.Interface, path string, poduid string, bytes int64) (QuotaID, error)
-	// Get the quota ID if any assigned to a path
-	GetQuotaID(path string) (QuotaID, error)
+	AssignQuota(m mount.Interface, path string, poduid string, bytes int64) error
 
 	// Get the quota-based storage consumption for the path
 	GetConsumption(path string) (int64, error)
@@ -44,5 +37,5 @@ type Interface interface {
 	// Remove the quota from a path
 	// Implementations may assume that any data covered by the
 	// quota has already been removed.
-	ClearQuota(m mount.Interface, path string, poduid string) (error)
+	ClearQuota(m mount.Interface, path string, poduid string) error
 }

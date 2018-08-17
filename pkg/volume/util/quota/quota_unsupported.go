@@ -18,26 +18,37 @@ limitations under the License.
 
 package quota
 
-func (quota *Quota) SupportsQuotas(_ mount.Interface, _ string) (bol, error) {
-	return false, errors.New("not implemented")
+import (
+	"errors"
+	"k8s.io/kubernetes/pkg/util/mount"
+)
+
+// Dummy quota implementation for systems that do not implement support
+// for volume quotas
+
+var errNotImplemented = errors.New("not implemented")
+
+// SupportsQuotas -- dummy implementation
+func SupportsQuotas(_ mount.Interface, _ string) (bool, error) {
+	return false, errNotImplemented
 }
 
-func (quota *Quota) AssignQuota(_ mount.Interface, _ string, _ string, _ int64) (QuotaID, error) {
-	return 0, errors.New("not implemented")
+// AssignQuota -- dummy implementation
+func AssignQuota(_ mount.Interface, _ string, _ string, _ int64) error {
+	return errNotImplemented
 }
 
-func (quota *Quota) GetQuotaID(_ string) (QuotaID, error) {
-	return 0, errors.New("not implemented")
+// GetConsumption -- dummy implementation
+func GetConsumption(_ string) (int64, error) {
+	return 0, errNotImplemented
 }
 
-func (quota *Quota) GetConsumption(_ string) (int64, error) {
-	return 0, errors.New("not implemented")
+// GetInodes -- dummy implementation
+func GetInodes(_ string) (int64, error) {
+	return 0, errNotImplemented
 }
 
-func (quota *Quota) GetInodes(_ string) (int64, error) {
-	return 0, errors.New("not implemented")
-}
-
-func (quota *Quota) ClearQuota(_ mount.Interface, _ string, _ string) (error) {
-	return errors.New("not implemented")
+// ClearQuota -- dummy implementation
+func ClearQuota(_ mount.Interface, _ string) error {
+	return errNotImplemented
 }

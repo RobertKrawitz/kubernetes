@@ -63,10 +63,10 @@ var quotaLock sync.RWMutex
 var supportsQuotasMap = make(map[string]bool)
 var supportsQuotasLock sync.RWMutex
 
-var mountParseRegexp *regexp.Regexp = regexp.MustCompile("^([^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
+var mountParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
 
-var projectsParseRegexp *regexp.Regexp = regexp.MustCompile("^([0123456789][0123456789]*):")
-var projidParseRegexp *regexp.Regexp = regexp.MustCompile("^[^:#][^:#]*:([0123456789][0123456789]*)")
+var projectsParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([[:digit:]]+):")
+var projidParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("[^#]:([[:digit:]]+)$")
 
 // Directory -> backingDev
 var backingDevMap = make(map[string]string)
@@ -332,6 +332,7 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 }
 
 func findAvailableQuotaID(path string) (common.QuotaID, error) {
+/*
 	for id := common.FirstQuota; id == id; id++ {
 		if _, ok := quotaPodMap[id]; ok {
 			continue
@@ -346,6 +347,9 @@ func findAvailableQuotaID(path string) (common.QuotaID, error) {
 		return id, nil
 	}
 	return common.BadQuotaID, fmt.Errorf("Can't find available quota ID")
+*/
+	id, err := createQuotaID(path)
+	return id, err
 }
 
 // AssignQuota -- assign a quota to the specified directory.
@@ -461,6 +465,11 @@ func ClearQuota(m mount.Interface, path string) error {
 		err = clearQuotaOnDir(m, path)
 		if err != nil {
 			klog.V(3).Infof("Unable to clear quota %v %s: %v", dirQuotaMap[path], path, err)
+		} else {
+			err = removeQuotaID(projid)
+			if err != nil {
+				klog.V(3).Infof("removeQuotaID %v failed: %v", projid, err)
+			}
 		}
 		delete(quotaSizeMap, podQuotaMap[poduid])
 		delete(quotaPodMap, podQuotaMap[poduid])

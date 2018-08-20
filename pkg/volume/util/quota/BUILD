@@ -3,6 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "go_default_library",
     srcs = [
+        "project.go",
         "quota.go",
         "quota_linux.go",
         "quota_unsupported.go",

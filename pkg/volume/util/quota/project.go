@@ -34,17 +34,14 @@ import (
 
 var quotaIDLock sync.RWMutex
 
-const (
-)
-
 func projFilesAreOK() error {
 	sProjects, err := os.Lstat(projectsFile)
-	if err == nil && ! sProjects.Mode().IsRegular() {
-		return fmt.Errorf("%s exists but is not a plain file, cannot continue!", projectsFile)
+	if err == nil && !sProjects.Mode().IsRegular() {
+		return fmt.Errorf("%s exists but is not a plain file, cannot continue", projectsFile)
 	}
 	sProjid, err := os.Lstat(projidFile)
-	if err == nil && ! sProjid.Mode().IsRegular() {
-		return fmt.Errorf("%s exists but is not a plain file, cannot continue!", projidFile)
+	if err == nil && !sProjid.Mode().IsRegular() {
+		return fmt.Errorf("%s exists but is not a plain file, cannot continue", projidFile)
 	}
 	return nil
 }
@@ -143,7 +140,7 @@ func scanOneFile(ifile *os.File, ofile *os.File, path string, idToRemove common.
 		return scanner.Err()
 	}
 	if !foundIDToRemove {
-		klog.V(3).Infof("Couldn't find ID to remove");
+		klog.V(3).Infof("Couldn't find ID to remove")
 		return fmt.Errorf("Cannot find project %v", idToRemove)
 	}
 	return nil
@@ -210,11 +207,11 @@ func scanProjectFiles(fProjects *os.File, fProjid *os.File, path string, idToRem
 	tmpID := string(uuid.NewUUID())
 	tmpProjects := fmt.Sprintf("%s_%s", projectsFile, tmpID)
 	tmpProjid := fmt.Sprintf("%s_%s", projidFile, tmpID)
-	tmpProjectsFile, err := os.OpenFile(tmpProjects, os.O_CREATE | os.O_EXCL | os.O_RDWR, 0644)
+	tmpProjectsFile, err := os.OpenFile(tmpProjects, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 	if err != nil {
 		return common.BadQuotaID, err
 	}
-	tmpProjidFile, err := os.OpenFile(tmpProjid, os.O_CREATE | os.O_EXCL | os.O_RDWR, 0644)
+	tmpProjidFile, err := os.OpenFile(tmpProjid, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 	if err != nil {
 		tmpProjectsFile.Close()
 		os.Remove(tmpProjects)
@@ -277,7 +274,7 @@ func createQuotaID(path string) (common.QuotaID, error) {
 	return ID, err
 }
 
-func removeQuotaIDInternal(ID common.QuotaID) (error) {
+func removeQuotaIDInternal(ID common.QuotaID) error {
 	fProjects, fProjid, err := openAndLockProjectFiles()
 	if err != nil {
 		return err
@@ -287,7 +284,7 @@ func removeQuotaIDInternal(ID common.QuotaID) (error) {
 	return err
 }
 
-func removeQuotaID(ID common.QuotaID) (error) {
+func removeQuotaID(ID common.QuotaID) error {
 	klog.V(3).Infof("<<<<< Removing quota %v", ID)
 	quotaIDLock.Lock()
 	err := removeQuotaIDInternal(ID)

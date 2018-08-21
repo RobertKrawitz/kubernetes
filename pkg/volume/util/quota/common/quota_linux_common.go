@@ -22,12 +22,13 @@ package common
 type QuotaID int32
 
 const (
-	// FirstQuota is the quota ID we start with.
-	// XXXXXXX Need a better way of doing this...
-	FirstQuota QuotaID = 1048577
 	// BadQuotaID -- Invalid quota
 	BadQuotaID QuotaID = 0
 )
+
+// FirstQuota is the quota ID we start with.
+// XXXXXXX Need a better way of doing this...
+var FirstQuota QuotaID = 1048577
 
 // LinuxVolumeQuotaProvider returns an appropriate quota applier
 // object if we can support quotas on this device

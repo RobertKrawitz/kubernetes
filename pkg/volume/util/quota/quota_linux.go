@@ -75,11 +75,9 @@ var backingDevLock sync.RWMutex
 var mountpointMap = make(map[string]string)
 var mountpointLock sync.RWMutex
 
-const (
-	mountsFile   = "/proc/self/mounts"
-	projectsFile = "/etc/projects"
-	projidFile   = "/etc/projid"
-)
+var mountsFile = "/proc/self/mounts"
+var projectsFile = "/etc/projects"
+var projidFile = "/etc/projid"
 
 var providers = []common.LinuxVolumeQuotaProvider{
 	&xfs.VolumeProvider{},
@@ -332,22 +330,22 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 }
 
 func findAvailableQuotaID(path string) (common.QuotaID, error) {
-/*
-	for id := common.FirstQuota; id == id; id++ {
-		if _, ok := quotaPodMap[id]; ok {
-			continue
+	/*
+		for id := common.FirstQuota; id == id; id++ {
+			if _, ok := quotaPodMap[id]; ok {
+				continue
+			}
+			isInUse, err := idIsInUse(path, id)
+			if err != nil {
+				return common.BadQuotaID, err
+			} else if isInUse {
+				klog.V(3).Infof("Project ID %v is in use, trying again", id)
+				continue
+			}
+			return id, nil
 		}
-		isInUse, err := idIsInUse(path, id)
-		if err != nil {
-			return common.BadQuotaID, err
-		} else if isInUse {
-			klog.V(3).Infof("Project ID %v is in use, trying again", id)
-			continue
-		}
-		return id, nil
-	}
-	return common.BadQuotaID, fmt.Errorf("Can't find available quota ID")
-*/
+		return common.BadQuotaID, fmt.Errorf("Can't find available quota ID")
+	*/
 	id, err := createQuotaID(path)
 	return id, err
 }

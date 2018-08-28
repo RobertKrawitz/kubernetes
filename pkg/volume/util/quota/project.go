@@ -68,6 +68,8 @@ func openAndLockProjectFiles() (*os.File, *os.File, error) {
 	if err := projFilesAreOK(); err != nil {
 		return nil, nil, err
 	}
+	// We don't actually modify the original files; we create temporaries and
+	// move them over the originals
 	fProjects, err := os.OpenFile(projectsFile, os.O_RDONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, nil, err
@@ -177,7 +179,8 @@ func findAvailableQuota(path string, idMap map[common.QuotaID]bool) (common.Quot
 	return common.BadQuotaID, nil
 }
 
-func scanProjectFilesInternal(projectsFile *os.File, projidFile *os.File, tmpProjectsFile *os.File, tmpProjidFile *os.File, path string, idToRemove common.QuotaID, idMap map[common.QuotaID]bool) (common.QuotaID, error) {
+func scanProjectFilesInternal(projectsFile *os.File, projidFile *os.File, tmpProjectsFile *os.File, tmpProjidFile *os.File, path string, idToRemove common.QuotaID) (common.QuotaID, error) {
+	idMap := make(map[common.QuotaID]bool)
 	var err error
 	if err = scanOneFile(projectsFile, tmpProjectsFile, path, idToRemove, projectsParseRegexp, idMap); err != nil {
 		klog.V(3).Infof("scanOneFile projects file failed %#+v", err)
@@ -191,13 +194,14 @@ func scanProjectFilesInternal(projectsFile *os.File, projidFile *os.File, tmpPro
 	if idToRemove == common.BadQuotaID {
 		// Add quota case: find a new quota and add it
 		id, err = findAvailableQuota(path, idMap)
-		klog.V(3).Infof("Got ID %v, err %v", id, err)
-		if err == nil {
-			_, err = tmpProjectsFile.WriteString(fmt.Sprintf("%v:%s\n", id, path))
-			if err == nil {
-				_, err = tmpProjidFile.WriteString(fmt.Sprintf("volume%v:%v\n", id, id))
-			}
+		if err != nil {
+			return common.BadQuotaID, err
 		}
+		_, err = tmpProjectsFile.WriteString(fmt.Sprintf("%v:%s\n", id, path))
+		if err != nil {
+			return common.BadQuotaID, err
+		}
+		_, err = tmpProjidFile.WriteString(fmt.Sprintf("volume%v:%v\n", id, id))
 		if err != nil {
 			return common.BadQuotaID, err
 		}
@@ -220,7 +224,6 @@ func scanProjectFiles(fProjects *os.File, fProjid *os.File, path string, idToRem
 		return common.BadQuotaID, err
 	}
 	projidMode := projidStat.Mode() & os.ModePerm
-	idMap := make(map[common.QuotaID]bool)
 	tmpProjectsFile, err := ioutil.TempFile(filepath.Dir(projectsFile), filepath.Base(projectsFile))
 	if err != nil {
 		return common.BadQuotaID, err
@@ -233,7 +236,7 @@ func scanProjectFiles(fProjects *os.File, fProjid *os.File, path string, idToRem
 		return common.BadQuotaID, err
 	}
 	tmpProjid := tmpProjidFile.Name()
-	id, err := scanProjectFilesInternal(fProjects, fProjid, tmpProjectsFile, tmpProjidFile, path, idToRemove, idMap)
+	id, err := scanProjectFilesInternal(fProjects, fProjid, tmpProjectsFile, tmpProjidFile, path, idToRemove)
 	if err != nil {
 		tmpProjectsFile.Close()
 		os.Remove(tmpProjects)
@@ -275,23 +278,8 @@ func scanProjectFiles(fProjects *os.File, fProjid *os.File, path string, idToRem
 	return id, nil
 }
 
-/*
-func addDirToQuota(path string, id common.QuotaID) error {
-	quotaIDLock.Lock()
-	quotaIDLock.Unlock()
-	return err
-}
-
-func removeDirFromQuota(path string, id common.QuotaID) error {
-	quotaIDLock.Lock()
-	quotaIDLock.Unlock()
-	return err
-}
-*/
-
 func createQuotaIDInternal(path string) (common.QuotaID, error) {
 	fProjects, fProjid, err := openAndLockProjectFiles()
-	klog.V(3).Infof(">>>>> openAndLockProjectFiles gives %v, %v, %v", fProjects, fProjid, err)
 	if err != nil {
 		return common.BadQuotaID, err
 	}
@@ -321,7 +309,9 @@ func removeQuotaIDInternal(ID common.QuotaID) error {
 }
 
 func removeQuotaID(ID common.QuotaID) error {
-	klog.V(3).Infof("<<<<< Removing quota %v", ID)
+	if ID == common.BadQuotaID {
+		return fmt.Errorf("attempting to remove invalid quota ID %v", ID)
+	}
 	quotaIDLock.Lock()
 	err := removeQuotaIDInternal(ID)
 	quotaIDLock.Unlock()

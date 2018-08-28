@@ -142,6 +142,9 @@ func (v xfsVolumeQuota) GetQuotaOnDir(path string) (common.QuotaID, error) {
 	if errno != 0 {
 		return common.BadQuotaID, fmt.Errorf("Failed to get quota ID for %s: %v", path, errno.Error())
 	}
+	if fsx.fsx_projid == 0 {
+		return common.BadQuotaID, fmt.Errorf("Failed to get quota ID for %s: %s", path, "no applicable quota")
+	}
 	return common.QuotaID(fsx.fsx_projid), nil
 }
 

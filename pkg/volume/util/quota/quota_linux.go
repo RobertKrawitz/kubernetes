@@ -234,12 +234,11 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 	// we explicitly have to check in this case.
 	klog.V(3).Infof("clearQuotaOnDir %s", path)
 	supportsQuotas, err := SupportsQuotas(m, path)
-	klog.V(3).Infof("clearQuotaOnDir %s supports quotas %v %v", path, supportsQuotas, err)
 	if !supportsQuotas {
 		return nil
 	}
 	projid, err := getQuotaOnDir(m, path)
-	if err == nil {
+	if err == nil && projid != common.BadQuotaID {
 		klog.V(3).Infof("clearQuotaOnDir clearing quota")
 		// This means that we have a quota on the directory but
 		// we can't clear it.  That's not good.

@@ -21,16 +21,23 @@ package quota
 import (
 	"bufio"
 	"fmt"
+	"io/ioutil"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"sync"
 
 	"golang.org/x/sys/unix"
-	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/volume/util/quota/common"
 )
+
+var projectsFile = "/etc/projects"
+var projidFile = "/etc/projid"
+
+var projectsParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([[:digit:]]+):")
+var projidParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("[^#]:([[:digit:]]+)$")
 
 var quotaIDLock sync.RWMutex
 
@@ -46,8 +53,12 @@ func projFilesAreOK() error {
 	return nil
 }
 
-func getFD(file *os.File) int {
-	return int(file.Fd())
+func lockFile(file *os.File) error {
+	return unix.Flock(int(file.Fd()), unix.LOCK_EX)
+}
+
+func unlockFile(file *os.File) error {
+	return unix.Flock(int(file.Fd()), unix.LOCK_UN)
 }
 
 // openAndLockProjectFiles opens /etc/projects and /etc/projid locked.
@@ -72,16 +83,16 @@ func openAndLockProjectFiles() (*os.File, *os.File, error) {
 		fProjects.Close()
 		return nil, nil, err
 	}
-	err = unix.Flock(getFD(fProjects), unix.LOCK_EX)
+	err = lockFile(fProjects)
 	if err != nil {
 		fProjid.Close()
 		fProjects.Close()
 		return nil, nil, err
 	}
-	err = unix.Flock(getFD(fProjid), unix.LOCK_EX)
+	err = lockFile(fProjid)
 	if err != nil {
 		// Nothing useful we can do if we get an error here
-		unix.Flock(getFD(fProjects), unix.LOCK_UN)
+		unlockFile(fProjects)
 		fProjid.Close()
 		fProjects.Close()
 		return nil, nil, err
@@ -93,10 +104,16 @@ func closeProjectFiles(fProjects *os.File, fProjid *os.File) error {
 	// Nothing useful we can do if either of these fail,
 	// but we have to unlock and close the files anyway.
 	// Do it in reverse order of locking, of course.
-	unix.Flock(getFD(fProjid), unix.LOCK_UN)
-	unix.Flock(getFD(fProjects), unix.LOCK_UN)
-	err := fProjid.Close()
-	err1 := fProjects.Close()
+	var err error
+	var err1 error
+	if fProjid != nil {
+		unlockFile(fProjid)
+		err = fProjid.Close()
+	}
+	if fProjects != nil {
+		unlockFile(fProjects)
+		err1 = fProjects.Close()
+	}
 	if err != nil {
 		return err
 	}
@@ -204,19 +221,18 @@ func scanProjectFiles(fProjects *os.File, fProjid *os.File, path string, idToRem
 	}
 	projidMode := projidStat.Mode() & os.ModePerm
 	idMap := make(map[common.QuotaID]bool)
-	tmpID := string(uuid.NewUUID())
-	tmpProjects := fmt.Sprintf("%s_%s", projectsFile, tmpID)
-	tmpProjid := fmt.Sprintf("%s_%s", projidFile, tmpID)
-	tmpProjectsFile, err := os.OpenFile(tmpProjects, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
+	tmpProjectsFile, err := ioutil.TempFile(filepath.Dir(projectsFile), filepath.Base(projectsFile))
 	if err != nil {
 		return common.BadQuotaID, err
 	}
-	tmpProjidFile, err := os.OpenFile(tmpProjid, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
+	tmpProjects := tmpProjectsFile.Name()
+	tmpProjidFile, err := ioutil.TempFile(filepath.Dir(projidFile), filepath.Base(projidFile))
 	if err != nil {
 		tmpProjectsFile.Close()
 		os.Remove(tmpProjects)
 		return common.BadQuotaID, err
 	}
+	tmpProjid := tmpProjidFile.Name()
 	id, err := scanProjectFilesInternal(fProjects, fProjid, tmpProjectsFile, tmpProjidFile, path, idToRemove, idMap)
 	if err != nil {
 		tmpProjectsFile.Close()
@@ -241,17 +257,37 @@ func scanProjectFiles(fProjects *os.File, fProjid *os.File, path string, idToRem
 	}
 	// Until now everything has been safe; we've been working with temporary
 	// files.  Now comes the dangerous part: renaming the two temporary
-	// files over the old ones.
+	// files over the old ones.  The first one's not too dangerous; if
+	// the rename fails, we'll still have the old projid file.
 	err = os.Rename(tmpProjid, projidFile)
-	err1 := os.Rename(tmpProjects, projectsFile)
-	if err != nil || err1 != nil {
-		if err != nil {
-			return common.BadQuotaID, err
-		}
-		return common.BadQuotaID, err1
+	if err != nil {
+		os.Remove(tmpProjid)
+		os.Remove(tmpProjects)
+		return common.BadQuotaID, err
+	}
+	// If *this* fails, the projects and projid files may be inconsistent.
+	// Unfortunately, we can't atomically rename two files.
+	err = os.Rename(tmpProjects, projectsFile)
+	if err != nil {
+		os.Remove(tmpProjects)
+		return common.BadQuotaID, err
 	}
 	return id, nil
 }
+
+/*
+func addDirToQuota(path string, id common.QuotaID) error {
+	quotaIDLock.Lock()
+	quotaIDLock.Unlock()
+	return err
+}
+
+func removeDirFromQuota(path string, id common.QuotaID) error {
+	quotaIDLock.Lock()
+	quotaIDLock.Unlock()
+	return err
+}
+*/
 
 func createQuotaIDInternal(path string) (common.QuotaID, error) {
 	fProjects, fProjid, err := openAndLockProjectFiles()

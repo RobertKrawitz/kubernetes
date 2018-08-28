@@ -62,6 +62,7 @@ import "C"
 
 import (
 	"fmt"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -78,9 +79,11 @@ type VolumeProvider struct {
 func (*VolumeProvider) GetQuotaApplier(backingDev string) common.LinuxVolumeQuotaApplier {
 	// For now, we're only going to do quotas on XFS
 	var qstat C.fs_quota_stat_t
+	CPath := C.CString(backingDev)
+	defer free(CPath)
 
 	// And this is an XFS-specific quota call
-	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, uintptr(C.Q_XGETQSTAT_PRJQUOTA), uintptr(unsafe.Pointer(C.CString(backingDev))), 0, uintptr(unsafe.Pointer(&qstat)), 0, 0)
+	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, uintptr(C.Q_XGETQSTAT_PRJQUOTA), uintptr(unsafe.Pointer(CPath)), 0, uintptr(unsafe.Pointer(&qstat)), 0, 0)
 	if errno == 0 && qstat.qs_flags&C.FS_QUOTA_PDQ_ENFD > 0 && qstat.qs_flags&C.FS_QUOTA_PDQ_ACCT > 0 {
 		return xfsVolumeQuota{backingDev}
 	}
@@ -159,7 +162,7 @@ func (v xfsVolumeQuota) SetQuotaOnDir(path string, id common.QuotaID, bytes int6
 	d.d_flags = C.XFS_PROJ_QUOTA
 
 	d.d_fieldmask = C.FS_DQ_BHARD
-	d.d_blk_hardlimit = C.__u64(bytes / 512)
+	d.d_blk_hardlimit = C.__u64(bytes / quotaBsize)
 	d.d_blk_softlimit = d.d_blk_hardlimit
 
 	var cs = C.CString(v.backingDev)
@@ -194,9 +197,7 @@ func (v xfsVolumeQuota) SetQuotaOnDir(path string, id common.QuotaID, bytes int6
 	return nil
 }
 
-// common.QuotaIDIsInUse -- determine whether the quota ID is already in
-// use.
-func (v xfsVolumeQuota) QuotaIDIsInUse(path string, id common.QuotaID) (bool, error) {
+func (v xfsVolumeQuota) getQuotaInfo(path string, id common.QuotaID) (C.fs_disk_quota_t, syscall.Errno) {
 	var d C.fs_disk_quota_t
 
 	var cs = C.CString(v.backingDev)
@@ -205,43 +206,31 @@ func (v xfsVolumeQuota) QuotaIDIsInUse(path string, id common.QuotaID) (bool, er
 	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
 		uintptr(unsafe.Pointer(cs)), uintptr(C.__u32(id)),
 		uintptr(unsafe.Pointer(&d)), 0, 0)
-	return errno == 0, nil
+	return d, errno
 }
 
-func (v xfsVolumeQuota) getConsumptionInternal(path string, id common.QuotaID, typearg string) (int64, error) {
-	var d C.fs_disk_quota_t
-
-	var cs = C.CString(v.backingDev)
-	defer C.free(unsafe.Pointer(cs))
-
-	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
-		uintptr(unsafe.Pointer(cs)), uintptr(C.__u32(id)),
-		uintptr(unsafe.Pointer(&d)), 0, 0)
-	if errno != 0 {
-		return 0, fmt.Errorf("Failed to get consumption for dir %s: %v",
-			path, errno.Error())
-	}
-
-	switch typearg {
-	case "b":
-		klog.V(3).Infof("Consumption for %s is %v", path, d.d_bcount*512)
-		return int64(d.d_bcount) * quotaBsize, nil
-	case "i":
-		klog.V(3).Infof("Inode consumption for %s is %v", path, d.d_icount)
-		return int64(d.d_icount), nil
-	default:
-		return 0, fmt.Errorf("Unknown quota type %s", typearg)
-	}
+// QuotaIDIsInUse -- determine whether the quota ID is already in use.
+func (v xfsVolumeQuota) QuotaIDIsInUse(path string, id common.QuotaID) (bool, error) {
+	_, errno := v.getQuotaInfo(path, id)
+	return errno == 0, nil
 }
 
 // GetConsumption -- retrieve the consumption (in bytes) of the directory
 func (v xfsVolumeQuota) GetConsumption(path string, id common.QuotaID) (int64, error) {
-	inodes, err := v.getConsumptionInternal(path, id, "b")
-	return inodes, err
+	d, errno := v.getQuotaInfo(path, id)
+	if errno != 0 {
+		return 0, fmt.Errorf("Failed to get quota for %s: %s", path, errno.Error())
+	}
+	klog.V(3).Infof("Consumption for %s is %v", path, d.d_bcount*quotaBsize)
+	return int64(d.d_bcount) * quotaBsize, nil
 }
 
 // GetInodes -- retrieve the number of inodes in use under the directory
 func (v xfsVolumeQuota) GetInodes(path string, id common.QuotaID) (int64, error) {
-	inodes, err := v.getConsumptionInternal(path, id, "i")
-	return inodes, err
+	d, errno := v.getQuotaInfo(path, id)
+	if errno != 0 {
+		return 0, fmt.Errorf("Failed to get quota for %s: %s", path, errno.Error())
+	}
+	klog.V(3).Infof("Inode consumption for %s is %v", path, d.d_icount)
+	return int64(d.d_icount), nil
 }

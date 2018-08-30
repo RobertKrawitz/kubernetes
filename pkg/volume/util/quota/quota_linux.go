@@ -122,7 +122,7 @@ func clearBackingDev(path string) {
 }
 
 // Assumes that the path has been fully canonicalized
-// Breaking this up helps with testingxs
+// Breaking this up helps with testing
 func detectMountpointInternal(m mount.Interface, path string) (string, error) {
 	for path != "" && path != "/" {
 		// per pkg/util/mount/mount_linux this detects all but
@@ -149,15 +149,14 @@ func detectMountpointInternal(m mount.Interface, path string) (string, error) {
 
 func detectMountpoint(m mount.Interface, path string) (string, error) {
 	xpath, err := filepath.Abs(path)
-	if err != nil {
-		return "/", err
+	if err == nil {
+		if xpath, err = filepath.EvalSymlinks(xpath); err == nil {
+			if xpath, err = detectMountpointInternal(m, xpath); err == nil {
+				return xpath, nil
+			}
+		}
 	}
-	xpath, err = filepath.EvalSymlinks(xpath)
-	if err != nil {
-		return "/", err
-	}
-	xpath, err = detectMountpointInternal(m, xpath)
-	return xpath, err
+	return "/", err
 }
 
 // GetMountpoint returns the mount point for the specified path
@@ -246,7 +245,7 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 		if err != nil {
 			klog.V(3).Infof("Attempt to clear quota failed: %v", err)
 		}
-		err1 := removeQuotaID(projid)
+		err1 := removeQuotaID(path, projid)
 		if err1 != nil {
 			klog.V(3).Infof("Attempt to remove quota ID from system files failed: %v", err1)
 		}

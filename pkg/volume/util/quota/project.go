@@ -36,21 +36,31 @@ import (
 var projectsFile = "/etc/projects"
 var projidFile = "/etc/projid"
 
-var projectsParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([[:digit:]]+):")
-var projidParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("[^#]:([[:digit:]]+)$")
+var projectsParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([[:digit:]]+):(.*)$")
+var projidParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([^#][^:]*):([[:digit:]]+)$")
 
 var quotaIDLock sync.RWMutex
 
+type projectType struct {
+	isValid bool // False if we need to remove this line
+	id      common.QuotaID
+	data    string
+	line    string
+}
+
+type projectsList struct {
+	projects []projectType
+	projid   []projectType
+}
+
 func projFilesAreOK() error {
-	sProjects, err := os.Lstat(projectsFile)
-	if err == nil && !sProjects.Mode().IsRegular() {
-		return fmt.Errorf("%s exists but is not a plain file, cannot continue", projectsFile)
-	}
-	sProjid, err := os.Lstat(projidFile)
-	if err == nil && !sProjid.Mode().IsRegular() {
+	if sf, err := os.Lstat(projectsFile); err != nil || sf.Mode().IsRegular() {
+		if sf, err := os.Lstat(projidFile); err != nil || sf.Mode().IsRegular() {
+			return nil
+		}
 		return fmt.Errorf("%s exists but is not a plain file, cannot continue", projidFile)
 	}
-	return nil
+	return fmt.Errorf("%s exists but is not a plain file, cannot continue", projectsFile)
 }
 
 func lockFile(file *os.File) error {
@@ -75,31 +85,23 @@ func openAndLockProjectFiles() (*os.File, *os.File, error) {
 		return nil, nil, err
 	}
 	fProjid, err := os.OpenFile(projidFile, os.O_RDONLY|os.O_CREATE, 0644)
-	if err != nil {
-		fProjects.Close()
-		return nil, nil, err
-	}
-	// ...and check once more!
-	if err := projFilesAreOK(); err != nil {
+	if err == nil {
+		// Check once more, to ensure nothing got changed out from under us
+		if err := projFilesAreOK(); err == nil {
+			err = lockFile(fProjects)
+			if err == nil {
+				err = lockFile(fProjid)
+				if err == nil {
+					return fProjects, fProjid, nil
+				}
+				// Nothing useful we can do if we get an error here
+				unlockFile(fProjects)
+			}
+		}
 		fProjid.Close()
-		fProjects.Close()
-		return nil, nil, err
 	}
-	err = lockFile(fProjects)
-	if err != nil {
-		fProjid.Close()
-		fProjects.Close()
-		return nil, nil, err
-	}
-	err = lockFile(fProjid)
-	if err != nil {
-		// Nothing useful we can do if we get an error here
-		unlockFile(fProjects)
-		fProjid.Close()
-		fProjects.Close()
-		return nil, nil, err
-	}
-	return fProjects, fProjid, nil
+	fProjects.Close()
+	return nil, nil, err
 }
 
 func closeProjectFiles(fProjects *os.File, fProjid *os.File) error {
@@ -125,44 +127,46 @@ func closeProjectFiles(fProjects *os.File, fProjid *os.File) error {
 	return nil
 }
 
-func scanOneFile(ifile *os.File, ofile *os.File, path string, idToRemove common.QuotaID, re *regexp.Regexp, idMap map[common.QuotaID]bool) error {
-	scanner := bufio.NewScanner(ifile)
-	foundIDToRemove := (idToRemove == common.BadQuotaID)
+func parseProject(l string) projectType {
+	match := projectsParseRegexp.FindStringSubmatch(l)
+	if match != nil {
+		i, err := strconv.Atoi(match[1])
+		if err == nil {
+			return projectType{true, common.QuotaID(i), match[2], l}
+		}
+	}
+	return projectType{true, common.BadQuotaID, "", l}
+}
+
+func parseProjectsFile(f *os.File) []projectType {
+	var projects []projectType
+	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		rewriteLine := true
-		match := re.FindStringSubmatch(scanner.Text())
-		if match != nil {
-			projid := match[1]
-			i, err := strconv.Atoi(projid)
-			id := common.QuotaID(i)
-			if err != nil {
-				klog.V(3).Infof("Couldn't parse projid %s: %#+v", projid, err)
-				return err
-			}
-			if id == idToRemove && idToRemove != common.BadQuotaID {
-				rewriteLine = false
-				foundIDToRemove = true
-			}
-			if idToRemove == common.BadQuotaID {
-				idMap[id] = true
-			}
-		}
-		if rewriteLine {
-			if _, err := ofile.WriteString(fmt.Sprintf("%s\n", scanner.Text())); err != nil {
-				klog.V(3).Infof("Couldn't rewrite string: %#+v", err)
-				return err
-			}
+		project := parseProject(scanner.Text())
+		projects = append(projects, project)
+	}
+	return projects
+}
+
+func parseProjid(l string) projectType {
+	match := projidParseRegexp.FindStringSubmatch(l)
+	if match != nil {
+		i, err := strconv.Atoi(match[2])
+		if err == nil {
+			return projectType{true, common.QuotaID(i), match[1], l}
 		}
 	}
-	if scanner.Err() != nil {
-		klog.V(3).Infof("Got error from scanner: %#+v", scanner.Err())
-		return scanner.Err()
+	return projectType{true, common.BadQuotaID, "", l}
+}
+
+func parseProjidFile(f *os.File) []projectType {
+	var projids []projectType
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		projid := parseProjid(scanner.Text())
+		projids = append(projids, projid)
 	}
-	if !foundIDToRemove {
-		klog.V(3).Infof("Couldn't find ID to remove")
-		return fmt.Errorf("Cannot find project %v", idToRemove)
-	}
-	return nil
+	return projids
 }
 
 func findAvailableQuota(path string, idMap map[common.QuotaID]bool) (common.QuotaID, error) {
@@ -176,144 +180,178 @@ func findAvailableQuota(path string, idMap map[common.QuotaID]bool) (common.Quot
 			}
 		}
 	}
-	return common.BadQuotaID, nil
+	return common.BadQuotaID, fmt.Errorf("Cannot find available quota ID")
 }
 
-func scanProjectFilesInternal(projectsFile *os.File, projidFile *os.File, tmpProjectsFile *os.File, tmpProjidFile *os.File, path string, idToRemove common.QuotaID) (common.QuotaID, error) {
+func addDirToProject(path string, id common.QuotaID, list *projectsList) (common.QuotaID, error) {
 	idMap := make(map[common.QuotaID]bool)
+	for _, project := range list.projects {
+		if project.data == path {
+			if id != project.id {
+				return common.BadQuotaID, fmt.Errorf("Attempt to reassign project ID for %s", path)
+			}
+			// Trying to reassign a directory to the project it's
+			// already in.  Maybe this should be an error, but for
+			// now treat it as an idempotent operation
+			return id, nil
+		}
+		idMap[project.id] = true
+	}
+	var needToAddProjid = true
+	for _, projid := range list.projid {
+		idMap[projid.id] = true
+		if projid.id == id && id != common.BadQuotaID {
+			needToAddProjid = false
+		}
+	}
 	var err error
-	if err = scanOneFile(projectsFile, tmpProjectsFile, path, idToRemove, projectsParseRegexp, idMap); err != nil {
-		klog.V(3).Infof("scanOneFile projects file failed %#+v", err)
-		return common.BadQuotaID, err
-	}
-	if err = scanOneFile(projidFile, tmpProjidFile, path, idToRemove, projidParseRegexp, idMap); err != nil {
-		klog.V(3).Infof("scanOneFile projid file failed %#+v", err)
-		return common.BadQuotaID, err
-	}
-	id := common.BadQuotaID
-	if idToRemove == common.BadQuotaID {
-		// Add quota case: find a new quota and add it
+	if id == common.BadQuotaID {
 		id, err = findAvailableQuota(path, idMap)
 		if err != nil {
 			return common.BadQuotaID, err
 		}
-		_, err = tmpProjectsFile.WriteString(fmt.Sprintf("%v:%s\n", id, path))
-		if err != nil {
-			return common.BadQuotaID, err
-		}
-		_, err = tmpProjidFile.WriteString(fmt.Sprintf("volume%v:%v\n", id, id))
-		if err != nil {
-			return common.BadQuotaID, err
-		}
+		needToAddProjid = true
 	}
+	if needToAddProjid {
+		name := fmt.Sprintf("volume%v", id)
+		line := fmt.Sprintf("%s:%v", name, id)
+		list.projid = append(list.projid, projectType{true, id, name, line})
+	}
+	line := fmt.Sprintf("%v:%s", id, path)
+	list.projects = append(list.projects, projectType{true, id, path, line})
 	return id, nil
 }
 
-// If idToRemove is BadQuotaID, treat this as an add
-// operation.  Too much of this code is in common not to share it.
-// Returns the quota ID either removed or created.
-// If removing an ID, the path is ignored.
-func scanProjectFiles(fProjects *os.File, fProjid *os.File, path string, idToRemove common.QuotaID) (common.QuotaID, error) {
-	projectsStat, err := fProjects.Stat()
-	if err != nil {
-		return common.BadQuotaID, err
+func removeDirFromProject(path string, id common.QuotaID, list *projectsList) error {
+	if id == common.BadQuotaID {
+		return fmt.Errorf("Attempt to remove invalid quota ID from %s", path)
 	}
-	projectsMode := projectsStat.Mode() & os.ModePerm
-	projidStat, err := fProjid.Stat()
-	if err != nil {
-		return common.BadQuotaID, err
+	foundAt := -1
+	countByID := make(map[common.QuotaID]int)
+	for i, project := range list.projects {
+		if project.data == path {
+			if id != project.id {
+				return fmt.Errorf("Attempting to remove quota ID %v from path %s, but expecting ID %v", id, path, project.id)
+			} else if foundAt != -1 {
+				return fmt.Errorf("Found multiple quota IDs for path %s", path)
+			}
+			// Faster and easier than deleting an element
+			list.projects[i].isValid = false
+			foundAt = i
+		}
+		countByID[project.id]++
 	}
-	projidMode := projidStat.Mode() & os.ModePerm
-	tmpProjectsFile, err := ioutil.TempFile(filepath.Dir(projectsFile), filepath.Base(projectsFile))
-	if err != nil {
-		return common.BadQuotaID, err
+	if foundAt == -1 {
+		return fmt.Errorf("Cannot find quota associated with path %s", path)
 	}
-	tmpProjects := tmpProjectsFile.Name()
-	tmpProjidFile, err := ioutil.TempFile(filepath.Dir(projidFile), filepath.Base(projidFile))
-	if err != nil {
-		tmpProjectsFile.Close()
-		os.Remove(tmpProjects)
-		return common.BadQuotaID, err
-	}
-	tmpProjid := tmpProjidFile.Name()
-	id, err := scanProjectFilesInternal(fProjects, fProjid, tmpProjectsFile, tmpProjidFile, path, idToRemove)
-	if err != nil {
-		tmpProjectsFile.Close()
-		os.Remove(tmpProjects)
-		tmpProjidFile.Close()
-		os.Remove(tmpProjid)
-		return common.BadQuotaID, err
-	}
-
-	// Now, close the two files, rename new to old, and we're done.
-	var errs [4]error
-	errs[0] = tmpProjectsFile.Chmod(projectsMode)
-	errs[1] = tmpProjectsFile.Close()
-	errs[2] = tmpProjidFile.Chmod(projidMode)
-	errs[3] = tmpProjidFile.Close()
-	for _, err := range errs {
-		if err != nil {
-			os.Remove(tmpProjects)
-			os.Remove(tmpProjid)
-			return common.BadQuotaID, err
+	if countByID[id] <= 1 {
+		// Removing the last entry means that we're no longer using
+		// the quota ID, so remove that as well
+		for i, projid := range list.projid {
+			if projid.id == id {
+				list.projid[i].isValid = false
+			}
 		}
 	}
-	// Until now everything has been safe; we've been working with temporary
-	// files.  Now comes the dangerous part: renaming the two temporary
-	// files over the old ones.  The first one's not too dangerous; if
-	// the rename fails, we'll still have the old projid file.
-	err = os.Rename(tmpProjid, projidFile)
-	if err != nil {
-		os.Remove(tmpProjid)
-		os.Remove(tmpProjects)
-		return common.BadQuotaID, err
-	}
-	// If *this* fails, the projects and projid files may be inconsistent.
-	// Unfortunately, we can't atomically rename two files.
-	err = os.Rename(tmpProjects, projectsFile)
-	if err != nil {
-		os.Remove(tmpProjects)
-		return common.BadQuotaID, err
-	}
-	return id, nil
+	return nil
 }
 
-func createQuotaIDInternal(path string) (common.QuotaID, error) {
-	fProjects, fProjid, err := openAndLockProjectFiles()
+func readProjectFiles(projects *os.File, projid *os.File) projectsList {
+	return projectsList{parseProjectsFile(projects), parseProjidFile(projid)}
+}
+
+func writeProjectFile(base *os.File, projects []projectType) (string, error) {
+	oname := base.Name()
+	stat, err := base.Stat()
 	if err != nil {
-		return common.BadQuotaID, err
+		return "", err
 	}
-	defer closeProjectFiles(fProjects, fProjid)
-	ID, err := scanProjectFiles(fProjects, fProjid, path, common.BadQuotaID)
+	mode := stat.Mode() & os.ModePerm
+	f, err := ioutil.TempFile(filepath.Dir(oname), filepath.Base(oname))
 	if err != nil {
-		return common.BadQuotaID, err
+		return "", err
 	}
-	return ID, nil
+	filename := f.Name()
+	if err := os.Chmod(filename, mode); err != nil {
+		return "", err
+	}
+	for _, proj := range projects {
+		if proj.isValid {
+			if _, err := f.WriteString(fmt.Sprintf("%s\n", proj.line)); err != nil {
+				f.Close()
+				os.Remove(filename)
+				return "", err
+			}
+		}
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(filename)
+		return "", err
+	}
+	return filename, nil
+}
+
+func writeProjectFiles(fProjects *os.File, fProjid *os.File, list projectsList) error {
+	tmpProjid, err := writeProjectFile(fProjid, list.projid)
+	if err != nil {
+		return err
+	}
+	tmpProjects, err := writeProjectFile(fProjects, list.projects)
+	if err == nil {
+		err = os.Rename(tmpProjid, fProjid.Name())
+		// Until now everything has been safe; we've been working with temporary
+		// files.  Now comes the dangerous part: renaming the two temporary
+		// files over the old ones.  The first one's not too dangerous; if
+		// the rename fails, we'll still have the old projid file.
+		if err == nil {
+			err = os.Rename(tmpProjects, fProjects.Name())
+			if err == nil {
+				return nil
+			}
+		}
+		os.Remove(tmpProjects)
+	}
+	os.Remove(tmpProjid)
+	klog.V(3).Infof("Unable to write project files: %v", err)
+	return err
 }
 
 func createQuotaID(path string) (common.QuotaID, error) {
 	quotaIDLock.Lock()
-	ID, err := createQuotaIDInternal(path)
-	quotaIDLock.Unlock()
-	return ID, err
-}
-
-func removeQuotaIDInternal(ID common.QuotaID) error {
+	defer quotaIDLock.Unlock()
 	fProjects, fProjid, err := openAndLockProjectFiles()
-	if err != nil {
-		return err
+	ID := common.BadQuotaID
+	if err == nil {
+		defer closeProjectFiles(fProjects, fProjid)
+		list := readProjectFiles(fProjects, fProjid)
+		ID, err = addDirToProject(path, common.BadQuotaID, &list)
+		if err == nil && ID != common.BadQuotaID {
+			if err = writeProjectFiles(fProjects, fProjid, list); err == nil {
+				return ID, nil
+			}
+		}
 	}
-	defer closeProjectFiles(fProjects, fProjid)
-	_, err = scanProjectFiles(fProjects, fProjid, "", ID)
-	return err
+	klog.V(3).Infof("addQuotaID %s %v failed %v", path, ID, err)
+	return common.BadQuotaID, err
 }
 
-func removeQuotaID(ID common.QuotaID) error {
+func removeQuotaID(path string, ID common.QuotaID) error {
 	if ID == common.BadQuotaID {
 		return fmt.Errorf("attempting to remove invalid quota ID %v", ID)
 	}
 	quotaIDLock.Lock()
-	err := removeQuotaIDInternal(ID)
-	quotaIDLock.Unlock()
+	defer quotaIDLock.Unlock()
+	fProjects, fProjid, err := openAndLockProjectFiles()
+	if err == nil {
+		defer closeProjectFiles(fProjects, fProjid)
+		list := readProjectFiles(fProjects, fProjid)
+		err = removeDirFromProject(path, ID, &list)
+		if err == nil {
+			if err = writeProjectFiles(fProjects, fProjid, list); err == nil {
+				return nil
+			}
+		}
+	}
+	klog.V(3).Infof("removeQuotaID %s %v failed %v", path, ID, err)
 	return err
 }

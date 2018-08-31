@@ -312,8 +312,13 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 	// volumes in a pod, we can simply remove this line of code.
 	// If and when we decide permanently that we're going to adop
 	// one quota per volume, we can rip all of the pod code out.
-	poduid = string(uuid.NewUUID())
-	klog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", poduid, path)
+	// FIXME This is a testing hack!!!!
+	if bytes != (bytes/3)*3 {
+		poduid = string(uuid.NewUUID())
+		klog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", poduid, path)
+	} else {
+		klog.V(3).Infof("Using existing pod ID %s for directory %s", poduid, path)
+	}
 	pod, ok := dirPodMap[path]
 	if ok {
 		if pod != poduid {
@@ -329,16 +334,20 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 		if err == nil {
 			dirQuotaMap[path] = id
 			dirPodMap[path] = poduid
+			podDirCountMap[poduid]++
+			_, err = createQuotaID(path, id)
 		}
 		return err
 	}
-	id, err = createQuotaID(path)
+	id = common.BadQuotaID
+	id, err = createQuotaID(path, id)
 	if err != nil {
 		return err
 	}
 	err = setQuotaOnDir(path, id, bytes)
 	if err != nil {
 		klog.V(3).Infof("Assign quota FAILED %v", err)
+		removeQuotaID(path, id)
 		return err
 	}
 	quotaPodMap[id] = poduid
@@ -346,11 +355,7 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 	podQuotaMap[poduid] = id
 	dirQuotaMap[path] = id
 	dirPodMap[path] = poduid
-	if count, ok := podDirCountMap[poduid]; ok {
-		podDirCountMap[poduid] = count + 1
-	} else {
-		podDirCountMap[poduid] = 1
-	}
+	podDirCountMap[poduid]++
 	return nil
 }
 
@@ -401,7 +406,6 @@ func ClearQuota(m mount.Interface, path string) error {
 	var err error
 	projid, err := getQuotaOnDir(m, path)
 	if projid != dirQuotaMap[path] {
-		klog.V(3).Infof("Expected quota ID %v on dir %s does not match actual %v", dirQuotaMap[path], path, projid)
 		return fmt.Errorf("Expected quota ID %v on dir %s does not match actual %v", dirQuotaMap[path], path, projid)
 	}
 	count, ok := podDirCountMap[poduid]
@@ -415,6 +419,7 @@ func ClearQuota(m mount.Interface, path string) error {
 		delete(podDirCountMap, poduid)
 		delete(podQuotaMap, poduid)
 	} else {
+		err = removeQuotaID(path, projid)
 		podDirCountMap[poduid]--
 		klog.V(3).Infof("Not clearing quota for pod %s; still %v dirs outstanding", poduid, podDirCountMap[poduid])
 	}

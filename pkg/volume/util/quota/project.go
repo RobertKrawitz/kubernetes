@@ -305,7 +305,7 @@ func writeProjectFiles(fProjects *os.File, fProjid *os.File, writeProjid bool, l
 	return err
 }
 
-func createQuotaID(path string, ID common.QuotaID) (common.QuotaID, error) {
+func createProjectID(path string, ID common.QuotaID) (common.QuotaID, error) {
 	quotaIDLock.Lock()
 	defer quotaIDLock.Unlock()
 	fProjects, fProjid, err := openAndLockProjectFiles()
@@ -324,7 +324,7 @@ func createQuotaID(path string, ID common.QuotaID) (common.QuotaID, error) {
 	return common.BadQuotaID, err
 }
 
-func removeQuotaID(path string, ID common.QuotaID) error {
+func removeProjectID(path string, ID common.QuotaID) error {
 	if ID == common.BadQuotaID {
 		return fmt.Errorf("attempting to remove invalid quota ID %v", ID)
 	}

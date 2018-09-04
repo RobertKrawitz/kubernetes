@@ -104,17 +104,6 @@ func detectBackingDev(_ mount.Interface, mountpoint string) (string, error) {
 	return dev, err
 }
 
-// GetBackingDev returns the mount point for the specified path
-// It assumes that we already know the backing device for the path.
-func GetBackingDev(path string) (string, error) {
-	backingDevLock.Lock()
-	defer backingDevLock.Unlock()
-	if backingDev, ok := backingDevMap[path]; ok {
-		return backingDev, nil
-	}
-	return "/", fmt.Errorf("Backing device not found for %s", path)
-}
-
 func clearBackingDev(path string) {
 	backingDevLock.Lock()
 	defer backingDevLock.Unlock()
@@ -159,17 +148,6 @@ func detectMountpoint(m mount.Interface, path string) (string, error) {
 	return "/", err
 }
 
-// GetMountpoint returns the mount point for the specified path
-// It assumes that we already know the mountpoint for the path.
-func GetMountpoint(path string) (string, error) {
-	mountpointLock.Lock()
-	defer mountpointLock.Unlock()
-	if mountpoint, ok := mountpointMap[path]; ok {
-		return mountpoint, nil
-	}
-	return "/", fmt.Errorf("Backing device not found for %s", path)
-}
-
 func clearMountpoint(path string) {
 	mountpointLock.Lock()
 	defer mountpointLock.Unlock()
@@ -195,7 +173,6 @@ func getFSInfo(m mount.Interface, path string) (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		mountpointMap[path] = mountpoint
 	}
 
 	backingDev, okBackingDev := backingDevMap[path]
@@ -205,8 +182,9 @@ func getFSInfo(m mount.Interface, path string) (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		backingDevMap[path] = backingDev
 	}
+	mountpointMap[path] = mountpoint
+	backingDevMap[path] = backingDev
 	return mountpoint, backingDev, nil
 }
 
@@ -245,7 +223,7 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 		if err != nil {
 			klog.V(3).Infof("Attempt to clear quota failed: %v", err)
 		}
-		err1 := removeQuotaID(path, projid)
+		err1 := removeProjectID(path, projid)
 		if err1 != nil {
 			klog.V(3).Infof("Attempt to remove quota ID from system files failed: %v", err1)
 		}
@@ -279,19 +257,17 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 	}
 	// Do we know about this device?
 	applier, ok := devApplierMap[path]
-	if ok {
-		if applier != nil {
-			dirApplierMap[path] = applier
+	if !ok {
+		for _, provider := range providers {
+			if applier = provider.GetQuotaApplier(dev); applier != nil {
+				supportsQuotasMap[path] = true
+				break
+			}
 		}
-		return applier != nil, nil
 	}
-	for _, provider := range providers {
-		applier = provider.GetQuotaApplier(dev)
-		if applier != nil {
-			supportsQuotasMap[path] = true
-			dirApplierMap[path] = applier
-			return true, nil
-		}
+	if applier != nil {
+		dirApplierMap[path] = applier
+		return true, nil
 	}
 	return false, nil
 }
@@ -301,8 +277,7 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 // If the pod UID is identical to another one known, it may (but presently
 // doesn't) choose the same quota ID as other volumes in the pod.
 func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) error {
-	ok, err := SupportsQuotas(m, path)
-	if !ok {
+	if ok, err := SupportsQuotas(m, path); !ok {
 		return fmt.Errorf("Quotas not supported on %s: %v", path, err)
 	}
 	quotaLock.Lock()
@@ -319,44 +294,36 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 	} else {
 		klog.V(3).Infof("Using existing pod ID %s for directory %s", poduid, path)
 	}
-	pod, ok := dirPodMap[path]
-	if ok {
-		if pod != poduid {
-			return fmt.Errorf("Requesting quota on existing directory %s but different pod %s %s", path, pod, poduid)
-		}
+	if pod, ok := dirPodMap[path]; ok && pod != poduid {
+		return fmt.Errorf("Requesting quota on existing directory %s but different pod %s %s", path, pod, poduid)
 	}
-	id, ok := podQuotaMap[poduid]
+	oid, ok := podQuotaMap[poduid]
 	if ok {
-		if quotaSizeMap[id] != bytes {
-			return fmt.Errorf("Requesting quota of different size: old %v new %v", quotaSizeMap[id], bytes)
+		if quotaSizeMap[oid] != bytes {
+			return fmt.Errorf("Requesting quota of different size: old %v new %v", quotaSizeMap[oid], bytes)
 		}
-		err = setQuotaOnDir(path, id, bytes)
-		if err == nil {
+	} else {
+		oid = common.BadQuotaID
+	}
+	id, err := createProjectID(path, oid)
+	if err == nil {
+		if oid != common.BadQuotaID && oid != id {
+			klog.V(3).Infof("Attempt to reassign quota %v to %v", oid, id)
+			return fmt.Errorf("Attempt to reassign quota %v to %v", oid, id)
+		}
+		if err = setQuotaOnDir(path, id, bytes); err == nil {
+			quotaPodMap[id] = poduid
+			quotaSizeMap[id] = bytes
+			podQuotaMap[poduid] = id
 			dirQuotaMap[path] = id
 			dirPodMap[path] = poduid
 			podDirCountMap[poduid]++
-			_, err = createQuotaID(path, id)
+			return nil
 		}
-		return err
+		removeProjectID(path, id)
 	}
-	id = common.BadQuotaID
-	id, err = createQuotaID(path, id)
-	if err != nil {
-		return err
-	}
-	err = setQuotaOnDir(path, id, bytes)
-	if err != nil {
-		klog.V(3).Infof("Assign quota FAILED %v", err)
-		removeQuotaID(path, id)
-		return err
-	}
-	quotaPodMap[id] = poduid
-	quotaSizeMap[id] = bytes
-	podQuotaMap[poduid] = id
-	dirQuotaMap[path] = id
-	dirPodMap[path] = poduid
-	podDirCountMap[poduid]++
-	return nil
+	klog.V(3).Infof("Assign quota FAILED %v", err)
+	return err
 }
 
 // GetConsumption -- retrieve the consumption (in bytes) of the directory
@@ -419,7 +386,7 @@ func ClearQuota(m mount.Interface, path string) error {
 		delete(podDirCountMap, poduid)
 		delete(podQuotaMap, poduid)
 	} else {
-		err = removeQuotaID(path, projid)
+		err = removeProjectID(path, projid)
 		podDirCountMap[poduid]--
 		klog.V(3).Infof("Not clearing quota for pod %s; still %v dirs outstanding", poduid, podDirCountMap[poduid])
 	}

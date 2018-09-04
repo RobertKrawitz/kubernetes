@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/volume/util/quota/common"
+	"k8s.io/kubernetes/pkg/volume/util/quota/extfs"
 	"k8s.io/kubernetes/pkg/volume/util/quota/xfs"
 )
 
@@ -51,6 +52,7 @@ var devApplierMap = make(map[string]common.LinuxVolumeQuotaApplier)
 
 // Directory -> applier
 var dirApplierMap = make(map[string]common.LinuxVolumeQuotaApplier)
+var dirApplierLock sync.RWMutex
 
 // Pod -> refcount
 var podDirCountMap = make(map[string]int)
@@ -74,6 +76,7 @@ var mountpointLock sync.RWMutex
 var mountsFile = "/proc/self/mounts"
 
 var providers = []common.LinuxVolumeQuotaProvider{
+	&extfs.VolumeProvider{},
 	&xfs.VolumeProvider{},
 }
 
@@ -193,8 +196,26 @@ func clearFSInfo(path string) {
 	clearBackingDev(path)
 }
 
+func getApplier(path string) common.LinuxVolumeQuotaApplier {
+	dirApplierLock.Lock()
+	defer dirApplierLock.Unlock()
+	return dirApplierMap[path]
+}
+
+func setApplier(path string, applier common.LinuxVolumeQuotaApplier) {
+	dirApplierLock.Lock()
+	defer dirApplierLock.Unlock()
+	dirApplierMap[path] = applier
+}
+
+func clearApplier(path string) {
+	dirApplierLock.Lock()
+	defer dirApplierLock.Unlock()
+	delete(dirApplierMap, path)
+}
+
 func setQuotaOnDir(path string, id common.QuotaID, bytes int64) error {
-	return dirApplierMap[path].SetQuotaOnDir(path, id, bytes)
+	return getApplier(path).SetQuotaOnDir(path, id, bytes)
 }
 
 func getQuotaOnDir(m mount.Interface, path string) (common.QuotaID, error) {
@@ -202,7 +223,7 @@ func getQuotaOnDir(m mount.Interface, path string) (common.QuotaID, error) {
 	if err != nil {
 		return common.BadQuotaID, err
 	}
-	id, err := dirApplierMap[path].GetQuotaOnDir(path)
+	id, err := getApplier(path).GetQuotaOnDir(path)
 	return id, err
 }
 
@@ -256,19 +277,22 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 		return false, err
 	}
 	// Do we know about this device?
-	applier, ok := devApplierMap[path]
+	applier, ok := devApplierMap[mount]
 	if !ok {
 		for _, provider := range providers {
-			if applier = provider.GetQuotaApplier(dev); applier != nil {
+			if applier = provider.GetQuotaApplier(mount, dev); applier != nil {
+				devApplierMap[mount] = applier
 				supportsQuotasMap[path] = true
 				break
 			}
 		}
 	}
 	if applier != nil {
-		dirApplierMap[path] = applier
+		klog.V(3).Infof("SupportsQuotas got applier %v", applier)
+		setApplier(path, applier)
 		return true, nil
 	}
+	klog.V(3).Infof("SupportsQuotas got no applier")
 	return false, nil
 }
 
@@ -287,13 +311,8 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 	// volumes in a pod, we can simply remove this line of code.
 	// If and when we decide permanently that we're going to adop
 	// one quota per volume, we can rip all of the pod code out.
-	// FIXME This is a testing hack!!!!
-	if bytes != (bytes/3)*3 {
-		poduid = string(uuid.NewUUID())
-		klog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", poduid, path)
-	} else {
-		klog.V(3).Infof("Using existing pod ID %s for directory %s", poduid, path)
-	}
+	poduid = string(uuid.NewUUID())
+	klog.V(3).Infof("Synthesizing pod ID %s for directory %s in AssignQuota", poduid, path)
 	if pod, ok := dirPodMap[path]; ok && pod != poduid {
 		return fmt.Errorf("Requesting quota on existing directory %s but different pod %s %s", path, pod, poduid)
 	}
@@ -332,7 +351,7 @@ func GetConsumption(path string) (int64, error) {
 	// running the quota command, so it can't get recycled behind our back
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
-	applier := dirApplierMap[path]
+	applier := getApplier(path)
 	if applier == nil {
 		return 0, fmt.Errorf("No quota available for %s", path)
 	}
@@ -346,7 +365,7 @@ func GetInodes(path string) (int64, error) {
 	// running the quota command, so it can't get recycled behind our back
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
-	applier := dirApplierMap[path]
+	applier := getApplier(path)
 	if applier == nil {
 		return 0, fmt.Errorf("No quota available for %s", path)
 	}
@@ -392,6 +411,6 @@ func ClearQuota(m mount.Interface, path string) error {
 	}
 	delete(dirPodMap, path)
 	delete(dirQuotaMap, path)
-	delete(dirApplierMap, path)
+	clearApplier(path)
 	return err
 }

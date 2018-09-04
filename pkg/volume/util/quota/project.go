@@ -41,6 +41,8 @@ var projidParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([^#][^:]*):([[
 
 var quotaIDLock sync.RWMutex
 
+const maxUnusedQuotasToSearch = 128 // Don't go into an infinite loop searching for an unused quota
+
 type projectType struct {
 	isValid bool // False if we need to remove this line
 	id      common.QuotaID
@@ -155,13 +157,18 @@ func readProjectFiles(projects *os.File, projid *os.File) projectsList {
 }
 
 func findAvailableQuota(path string, idMap map[common.QuotaID]bool) (common.QuotaID, error) {
+	unusedQuotasSearched := 0
 	for id := common.FirstQuota; id == id; id++ {
 		if _, ok := idMap[id]; !ok {
-			isInUse, err := dirApplierMap[path].QuotaIDIsInUse(path, id)
+			isInUse, err := getApplier(path).QuotaIDIsInUse(path, id)
 			if err != nil {
 				return common.BadQuotaID, err
 			} else if !isInUse {
 				return id, nil
+			}
+			unusedQuotasSearched++
+			if unusedQuotasSearched > maxUnusedQuotasToSearch {
+				break
 			}
 		}
 	}
@@ -169,7 +176,6 @@ func findAvailableQuota(path string, idMap map[common.QuotaID]bool) (common.Quot
 }
 
 func addDirToProject(path string, id common.QuotaID, list *projectsList) (common.QuotaID, bool, error) {
-	klog.V(3).Infof("addDirToProject path %s id %v", path, id)
 	idMap := make(map[common.QuotaID]bool)
 	for _, project := range list.projects {
 		if project.data == path {

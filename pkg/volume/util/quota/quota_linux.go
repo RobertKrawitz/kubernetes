@@ -103,8 +103,7 @@ func detectBackingDevInternal(mountpoint string, mounts string) (string, error) 
 
 // detectBackingDev assumes that the mount point provided is valid
 func detectBackingDev(_ mount.Interface, mountpoint string) (string, error) {
-	dev, err := detectBackingDevInternal(mountpoint, mountsFile)
-	return dev, err
+	return detectBackingDevInternal(mountpoint, mountsFile)
 }
 
 func clearBackingDev(path string) {
@@ -223,8 +222,7 @@ func getQuotaOnDir(m mount.Interface, path string) (common.QuotaID, error) {
 	if err != nil {
 		return common.BadQuotaID, err
 	}
-	id, err := getApplier(path).GetQuotaOnDir(path)
-	return id, err
+	return getApplier(path).GetQuotaOnDir(path)
 }
 
 func clearQuotaOnDir(m mount.Interface, path string) error {
@@ -355,8 +353,7 @@ func GetConsumption(path string) (int64, error) {
 	if applier == nil {
 		return 0, fmt.Errorf("No quota available for %s", path)
 	}
-	size, error := applier.GetConsumption(path, dirQuotaMap[path])
-	return size, error
+	return applier.GetConsumption(path, dirQuotaMap[path])
 }
 
 // GetInodes -- retrieve the number of inodes in use under the directory
@@ -369,8 +366,7 @@ func GetInodes(path string) (int64, error) {
 	if applier == nil {
 		return 0, fmt.Errorf("No quota available for %s", path)
 	}
-	inodes, error := applier.GetInodes(path, dirQuotaMap[path])
-	return inodes, error
+	return applier.GetInodes(path, dirQuotaMap[path])
 }
 
 // ClearQuota -- remove the quota assigned to a directory

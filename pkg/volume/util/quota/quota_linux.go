@@ -246,13 +246,13 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 		if err1 != nil {
 			klog.V(3).Infof("Attempt to remove quota ID from system files failed: %v", err1)
 		}
+		clearFSInfo(path)
 		if err != nil {
 			return err
 		}
 		return err1
 	}
 	klog.V(3).Infof("clearQuotaOnDir fails %v", err)
-	clearFSInfo(path)
 	// If we couldn't get a quota, that's fine -- there may
 	// never have been one, and we have no way to know otherwise
 	return nil
@@ -280,17 +280,19 @@ func SupportsQuotas(m mount.Interface, path string) (bool, error) {
 		for _, provider := range providers {
 			if applier = provider.GetQuotaApplier(mount, dev); applier != nil {
 				devApplierMap[mount] = applier
-				supportsQuotasMap[path] = true
 				break
 			}
 		}
 	}
 	if applier != nil {
 		klog.V(3).Infof("SupportsQuotas got applier %v", applier)
+		supportsQuotasMap[path] = true
 		setApplier(path, applier)
 		return true, nil
 	}
 	klog.V(3).Infof("SupportsQuotas got no applier")
+	delete(backingDevMap, path)
+	delete(mountpointMap, path)
 	return false, nil
 }
 
@@ -379,6 +381,10 @@ func ClearQuota(m mount.Interface, path string) error {
 		// Nothing in the map either means that there was no
 		// quota to begin with or that we're clearing a
 		// stale directory, so if we find a quota, just remove it.
+		// The process of clearing the quota requires that an applier
+		// be found, which needs to be cleaned up.
+		defer delete(supportsQuotasMap, path)
+		defer clearApplier(path)
 		return clearQuotaOnDir(m, path)
 	}
 	_, ok = podQuotaMap[poduid]
@@ -407,6 +413,7 @@ func ClearQuota(m mount.Interface, path string) error {
 	}
 	delete(dirPodMap, path)
 	delete(dirQuotaMap, path)
+	delete(supportsQuotasMap, path)
 	clearApplier(path)
 	return err
 }

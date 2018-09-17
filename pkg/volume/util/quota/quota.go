@@ -17,9 +17,9 @@ limitations under the License.
 package quota
 
 import (
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/util/mount"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
 // Interface -- quota interface

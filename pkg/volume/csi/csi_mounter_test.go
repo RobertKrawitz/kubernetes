@@ -376,7 +376,7 @@ func TestMounterSetUpWithFSGroup(t *testing.T) {
 			fsGroupPtr = &fsGroup
 		}
 		mounterArgs.FsGroup = fsGroupPtr
- 		if err := csiMounter.SetUp(mounterArgs); err != nil {
+		if err := csiMounter.SetUp(mounterArgs); err != nil {
 			t.Fatalf("mounter.Setup failed: %v", err)
 		}
 

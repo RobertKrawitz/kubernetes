@@ -264,7 +264,7 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 // However, do cache the device->applier map; the number of devices
 // is bounded.
 func SupportsQuotas(m mount.Interface, path string) (bool, error) {
-	if (!enabledQuotasForMonitoring()) {
+	if !enabledQuotasForMonitoring() {
 		klog.V(3).Info("SupportsQuotas called, but quotas disabled")
 		return false, nil
 	}
@@ -381,7 +381,7 @@ func GetInodes(path string) (int64, error) {
 // ClearQuota -- remove the quota assigned to a directory
 func ClearQuota(m mount.Interface, path string) error {
 	klog.V(3).Infof("ClearQuota %s", path)
-	if (!enabledQuotasForMonitoring()) {
+	if !enabledQuotasForMonitoring() {
 		klog.V(3).Info("ClearQuota called, but quotas disabled")
 		return fmt.Errorf("ClearQuota called, but quotas disabled")
 	}

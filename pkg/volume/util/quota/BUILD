@@ -11,7 +11,9 @@ go_library(
     importpath = "k8s.io/kubernetes/pkg/volume/util/quota",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/features:go_default_library",
         "//pkg/util/mount:go_default_library",
+        "//staging/src/k8s.io/apiserver/pkg/util/feature:go_default_library",
     ] + select({
         "@io_bazel_rules_go//go/platform:linux": [
             "//pkg/volume/util/quota/common:go_default_library",
@@ -32,6 +34,7 @@ go_test(
     deps = select({
         "@io_bazel_rules_go//go/platform:linux": [
             "//pkg/util/mount:go_default_library",
+            "//pkg/volume/util/quota/common:go_default_library",
         ],
         "//conditions:default": [],
     }),

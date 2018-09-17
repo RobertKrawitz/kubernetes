@@ -24,8 +24,8 @@ import (
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/volume/util/quota/common"
 	"os"
-	"testing"
 	"strings"
+	"testing"
 )
 
 const dummyMountData = `sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
@@ -330,7 +330,7 @@ func TestDetectMountPoint(t *testing.T) {
 	}
 }
 
-var dummyMountPoints = []mount.MountPoint {
+var dummyMountPoints = []mount.MountPoint{
 	{
 		Device: "/dev/sda2",
 		Path:   "/quota1",
@@ -382,7 +382,7 @@ type VolumeProvider2 struct {
 type testVolumeQuota struct {
 }
 
-func logAllMaps (where string) () {
+func logAllMaps(where string) {
 	fmt.Sprintf("Maps at %s", where)
 	fmt.Sprintf("    Map podQuotaMap contents:")
 	for key, val := range podQuotaMap {
@@ -431,8 +431,8 @@ func logAllMaps (where string) () {
 	fmt.Sprintf("End maps %s", where)
 }
 
-var testIdQuotaMap = make(map[common.QuotaID]string)
-var testQuotaIdMap = make(map[string]common.QuotaID)
+var testIDQuotaMap = make(map[common.QuotaID]string)
+var testQuotaIDMap = make(map[string]common.QuotaID)
 
 func (*VolumeProvider1) GetQuotaApplier(mountpoint string, backingDev string) common.LinuxVolumeQuotaApplier {
 	if strings.HasPrefix(mountpoint, "/quota1") {
@@ -449,34 +449,33 @@ func (*VolumeProvider2) GetQuotaApplier(mountpoint string, backingDev string) co
 }
 
 func (v testVolumeQuota) SetQuotaOnDir(dir string, id common.QuotaID, _ int64) error {
-	odir, ok := testIdQuotaMap[id]
+	odir, ok := testIDQuotaMap[id]
 	if ok && dir != odir {
 		return fmt.Errorf("ID %v is already in use", id)
 	}
-	oid, ok := testQuotaIdMap[dir]
+	oid, ok := testQuotaIDMap[dir]
 	if ok && id != oid {
 		return fmt.Errorf("Directory %s already has a quota applied", dir)
 	}
-	testQuotaIdMap[dir] = id
-	testIdQuotaMap[id] = dir
+	testQuotaIDMap[dir] = id
+	testIDQuotaMap[id] = dir
 	return nil
 }
 
 func (v testVolumeQuota) GetQuotaOnDir(path string) (common.QuotaID, error) {
-	id, ok := testQuotaIdMap[path]
+	id, ok := testQuotaIDMap[path]
 	if ok {
-		return id, nil;
+		return id, nil
 	}
 	return common.BadQuotaID, fmt.Errorf("No quota available for %s", path)
 }
 
-
 func (v testVolumeQuota) QuotaIDIsInUse(_ string, id common.QuotaID) (bool, error) {
-	if _, ok := testIdQuotaMap[id]; ok {
+	if _, ok := testIDQuotaMap[id]; ok {
 		return true, nil
 	}
-	// So that we reject some 
-	if id %3 == 0 {
+	// So that we reject some
+	if id%3 == 0 {
 		return false, nil
 	}
 	return false, nil
@@ -506,25 +505,25 @@ func fakeClearQuota(path string) error {
 }
 
 type quotaTestCase struct {
-	path string;
-	poduid string;
-	bytes int64;
-	op string;
-	expectedProjects string;
-	expectedProjid string;
-	supportsQuota bool;
-	expectsSetQuota bool;
-	deltaExpectedPodQuotaCount int;
-	deltaExpectedDirQuotaCount int;
-	deltaExpectedQuotaPodCount int;
-	deltaExpectedDirPodCount int;
-	deltaExpectedDevApplierCount int;
-	deltaExpectedDirApplierCount int;
-	deltaExpectedPodDirCountCount int;
-	deltaExpectedQuotaSizeCount int;
-	deltaExpectedSupportsQuotasCount int;
-	deltaExpectedBackingDevCount int;
-	deltaExpectedMountpointCount int;
+	path                             string
+	poduid                           string
+	bytes                            int64
+	op                               string
+	expectedProjects                 string
+	expectedProjid                   string
+	supportsQuota                    bool
+	expectsSetQuota                  bool
+	deltaExpectedPodQuotaCount       int
+	deltaExpectedDirQuotaCount       int
+	deltaExpectedQuotaPodCount       int
+	deltaExpectedDirPodCount         int
+	deltaExpectedDevApplierCount     int
+	deltaExpectedDirApplierCount     int
+	deltaExpectedPodDirCountCount    int
+	deltaExpectedQuotaSizeCount      int
+	deltaExpectedSupportsQuotasCount int
+	deltaExpectedBackingDevCount     int
+	deltaExpectedMountpointCount     int
 }
 
 const (
@@ -545,7 +544,6 @@ const (
 `
 	projects5 = `1048581:/quota2/b
 `
-
 
 	projidHeader = `# This is a /etc/projid header
 xxxxxx:1048579
@@ -609,15 +607,14 @@ var quotaTestCases = []quotaTestCase{
 	},
 }
 
-
-func compareProjectsFiles(t *testing.T, testcase quotaTestCase, projectsFile string, projidFile string) () {
+func compareProjectsFiles(t *testing.T, testcase quotaTestCase, projectsFile string, projidFile string) {
 	bytes, err := ioutil.ReadFile(projectsFile)
 	if err != nil {
 		t.Error(err.Error())
 	} else {
 		s := string(bytes)
-		if (s != projectsHeader + testcase.expectedProjects) {
-			t.Errorf("Case %v /etc/projects miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, projectsHeader + testcase.expectedProjects, s)
+		if s != projectsHeader+testcase.expectedProjects {
+			t.Errorf("Case %v /etc/projects miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, projectsHeader+testcase.expectedProjects, s)
 		}
 	}
 	bytes, err = ioutil.ReadFile(projidFile)
@@ -625,8 +622,8 @@ func compareProjectsFiles(t *testing.T, testcase quotaTestCase, projectsFile str
 		t.Error(err.Error())
 	} else {
 		s := string(bytes)
-		if (s != projidHeader + testcase.expectedProjid) {
-			t.Errorf("Case %v /etc/projid miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, projidHeader + testcase.expectedProjid, s)
+		if s != projidHeader+testcase.expectedProjid {
+			t.Errorf("Case %v /etc/projid miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, projidHeader+testcase.expectedProjid, s)
 		}
 	}
 }
@@ -650,7 +647,7 @@ func TestAddRemoveQuotas(t *testing.T) {
 	}
 	projidFile = tmpProjidFile.Name()
 	tmpProjidFile.Close()
-	providers = []common.LinuxVolumeQuotaProvider {
+	providers = []common.LinuxVolumeQuotaProvider{
 		&VolumeProvider1{},
 		&VolumeProvider2{},
 	}

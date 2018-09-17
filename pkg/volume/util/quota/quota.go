@@ -17,7 +17,9 @@ limitations under the License.
 package quota
 
 import (
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/util/mount"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 )
 
 // Interface -- quota interface
@@ -38,4 +40,13 @@ type Interface interface {
 	// Implementations may assume that any data covered by the
 	// quota has already been removed.
 	ClearQuota(m mount.Interface, path string, poduid string) error
+}
+
+func enabledQuotasForMonitoring() bool {
+	return utilfeature.DefaultFeatureGate.Enabled(features.FSQuotaForLSCIMonitoring)
+}
+
+func enabledQuotasForEnforcement() bool {
+	return utilfeature.DefaultFeatureGate.Enabled(features.FSQuotaForLSCIEnforcement) &&
+		utilfeature.DefaultFeatureGate.Enabled(features.FSQuotaForLSCIMonitoring)
 }

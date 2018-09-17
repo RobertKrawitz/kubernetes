@@ -264,6 +264,10 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 // However, do cache the device->applier map; the number of devices
 // is bounded.
 func SupportsQuotas(m mount.Interface, path string) (bool, error) {
+	if (!enabledQuotasForMonitoring()) {
+		klog.V(3).Info("SupportsQuotas called, but quotas disabled")
+		return false, nil
+	}
 	supportsQuotasLock.Lock()
 	defer supportsQuotasLock.Unlock()
 	if supportsQuotas, ok := supportsQuotasMap[path]; ok {
@@ -330,6 +334,9 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 			klog.V(3).Infof("Attempt to reassign quota %v to %v", oid, id)
 			return fmt.Errorf("Attempt to reassign quota %v to %v", oid, id)
 		}
+		if bytes > 0 && !enabledQuotasForEnforcement() {
+			bytes = -1
+		}
 		if err = setQuotaOnDir(path, id, bytes); err == nil {
 			quotaPodMap[id] = poduid
 			quotaSizeMap[id] = bytes
@@ -374,6 +381,10 @@ func GetInodes(path string) (int64, error) {
 // ClearQuota -- remove the quota assigned to a directory
 func ClearQuota(m mount.Interface, path string) error {
 	klog.V(3).Infof("ClearQuota %s", path)
+	if (!enabledQuotasForMonitoring()) {
+		klog.V(3).Info("ClearQuota called, but quotas disabled")
+		return fmt.Errorf("ClearQuota called, but quotas disabled")
+	}
 	quotaLock.Lock()
 	defer quotaLock.Unlock()
 	poduid, ok := dirPodMap[path]

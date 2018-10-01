@@ -95,117 +95,6 @@ func dummyFakeMount1() mount.Interface {
 	}
 }
 
-func dummyFakeMount2() mount.Interface {
-	return &mount.FakeMounter{
-		MountPoints: []mount.MountPoint{
-			{
-				Device: "tmpfs",
-				Path:   "/tmp",
-				Type:   "tmpfs",
-				Opts:   []string{"rw", "nosuid", "nodev"},
-			},
-			{
-				Device: "/dev/sda1",
-				Path:   "/boot",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "dev/mapper/fedora-root",
-				Path:   "/",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "dev/mapper/fedora-home",
-				Path:   "/home",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "/dev/sdb1",
-				Path:   "/mnt/virt",
-				Type:   "xfs",
-				Opts:   []string{"rw", "relatime", "attr2", "inode64", "usrquota", "pquota"},
-			},
-		},
-	}
-}
-
-func dummyFakeMount3() mount.Interface {
-	return &mount.FakeMounter{
-		MountPoints: []mount.MountPoint{
-			{
-				Device: "tmpfs",
-				Path:   "/tmp",
-				Type:   "tmpfs",
-				Opts:   []string{"rw", "nosuid", "nodev"},
-			},
-			{
-				Device: "/dev/sda1",
-				Path:   "/boot",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "dev/mapper/fedora-root",
-				Path:   "/",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "dev/mapper/fedora-home",
-				Path:   "/home",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "/dev/sdb1",
-				Path:   "/mnt/virt",
-				Type:   "xfs",
-				Opts:   []string{"rw", "relatime", "attr2", "inode64", "usrquota", "pqnoenforce"},
-			},
-		},
-	}
-}
-
-func dummyFakeMount4() mount.Interface {
-	return &mount.FakeMounter{
-		MountPoints: []mount.MountPoint{
-			{
-				Device: "tmpfs",
-				Path:   "/tmp",
-				Type:   "tmpfs",
-				Opts:   []string{"rw", "nosuid", "nodev"},
-			},
-			{
-				Device: "/dev/sda1",
-				Path:   "/boot",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "/dev/mapper/fedora-root",
-				Path:   "/",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "/dev/mapper/fedora-home",
-				Path:   "/home",
-				Type:   "ext4",
-				Opts:   []string{"rw", "relatime"},
-			},
-			{
-				Device: "/dev/sdb1",
-				Path:   "/mnt/virt",
-				Type:   "xfs",
-				Opts:   []string{"rw", "relatime", "attr2", "inode64", "usrquota"},
-			},
-		},
-	}
-}
-
 type backingDevTest struct {
 	path           string
 	mountdata      string
@@ -648,6 +537,72 @@ func setFeature(feature utilfeature.Feature, value bool) error {
 	return utilfeature.DefaultFeatureGate.Set(fmt.Sprintf("%s=%s", string(feature), v))
 }
 
+func runCaseEnabled(t *testing.T, testcase quotaTestCase, seq int) bool {
+	fail := false
+	var err error
+	switch testcase.op {
+	case "Supports":
+		supports, err := fakeSupportsQuotas(testcase.path)
+		if err != nil {
+			fail = true
+			t.Errorf("Case %v (%s, %v) Got error in fakeSupportsQuotas: %v", seq, testcase.path, true, err)
+		}
+		if supports != testcase.supportsQuota {
+			fail = true
+			t.Errorf("Case %v (%s, %v) fakeSupportsQuotas got %v, expect %v", seq, testcase.path, true, supports, testcase.supportsQuota)
+		}
+		return fail
+	case "Set":
+		err = fakeAssignQuota(testcase.path, testcase.poduid, testcase.bytes)
+	case "Clear":
+		err = fakeClearQuota(testcase.path)
+	case "GetConsumption":
+		_, err = GetConsumption(testcase.path)
+	case "GetInodes":
+		_, err = GetInodes(testcase.path)
+	default:
+		t.Errorf("Case %v (%s, %v) unknown operation %s", seq, testcase.path, true, testcase.op)
+		return true
+	}
+	if err != nil && testcase.expectsSetQuota {
+		fail = true
+		t.Errorf("Case %v (%s, %v) %s expected to clear quota but failed %v", seq, testcase.path, true, testcase.op, err)
+	} else if err == nil && !testcase.expectsSetQuota {
+		fail = true
+		t.Errorf("Case %v (%s, %v) %s expected not to clear quota but succeeded", seq, testcase.path, true, testcase.op)
+	}
+	return fail
+}
+
+func runCaseDisabled(t *testing.T, testcase quotaTestCase, seq int) bool {
+	var err error
+	var supports bool
+	switch testcase.op {
+	case "Supports":
+		if supports, err = fakeSupportsQuotas(testcase.path); supports {
+			t.Errorf("Case %v (%s, %v) supports quotas but shouldn't", seq, testcase.path, false)
+			return true
+		}
+		return false
+	case "Set":
+		err = fakeAssignQuota(testcase.path, testcase.poduid, testcase.bytes)
+	case "Clear":
+		err = fakeClearQuota(testcase.path)
+	case "GetConsumption":
+		_, err = GetConsumption(testcase.path)
+	case "GetInodes":
+		_, err = GetInodes(testcase.path)
+	default:
+		t.Errorf("Case %v (%s, %v) unknown operation %s", seq, testcase.path, false, testcase.op)
+		return true
+	}
+	if err == nil {
+		t.Errorf("Case %v (%s, %v) %s: supports quotas but shouldn't", seq, testcase.path, false, testcase.op)
+		return true
+	}
+	return false
+}
+
 func testAddRemoveQuotas(t *testing.T, enabled bool) {
 	if err := setFeature(features.FSQuotaForLSCIMonitoring, enabled); err != nil {
 		t.Errorf("Unable to enable LSCI monitoring: %v", err)
@@ -738,88 +693,13 @@ func testAddRemoveQuotas(t *testing.T, enabled bool) {
 			expectedBackingDevCount += testcase.deltaExpectedBackingDevCount
 			expectedMountpointCount += testcase.deltaExpectedMountpointCount
 		}
-		var err error
 		fail := false
-		switch testcase.op {
-		case "Supports":
-			supports, err := fakeSupportsQuotas(testcase.path)
-			if !enabled {
-				if supports {
-					t.Errorf("Case %v (%s, %v) supports quotas but shouldn't", seq, testcase.path, enabled)
-				}
-			} else {
-				if err != nil {
-					fail = true
-					t.Errorf("Case %v (%s, %v) Got error in fakeSupportsQuotas: %v", seq, testcase.path, enabled, err)
-				}
-				if supports != testcase.supportsQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) fakeSupportsQuotas got %v, expect %v", seq, testcase.path, enabled, supports, testcase.supportsQuota)
-				}
-			}
-		case "Set":
-			err = fakeAssignQuota(testcase.path, testcase.poduid, testcase.bytes)
-			if !enabled {
-				if err == nil {
-					t.Errorf("Case %v (%s, %v) set: supports quotas but shouldn't", seq, testcase.path, enabled)
-				}
-			} else {
-				if err != nil && testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected to set quota but failed %v", seq, testcase.path, enabled, err)
-				} else if err == nil && !testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected not to set quota but succeeded", seq, testcase.path, enabled)
-				}
-			}
-		case "Clear":
-			err = fakeClearQuota(testcase.path)
-			if !enabled {
-				if err == nil {
-					t.Errorf("Case %v (%s, %v) clear: supports quotas but shouldn't", seq, testcase.path, enabled)
-				}
-			} else {
-				if err != nil && testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected to clear quota but failed %v", seq, testcase.path, enabled, err)
-				} else if err == nil && !testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected not to clear quota but succeeded", seq, testcase.path, enabled)
-				}
-			}
-		case "GetConsumption":
-			_, err := GetConsumption(testcase.path)
-			if !enabled {
-				if err == nil {
-					t.Errorf("Case %v (%s, %v) GetConsumption: supports quotas but shouldn't", seq, testcase.path, enabled)
-				}
-			} else {
-				if err != nil && testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected to clear quota but failed %v", seq, testcase.path, enabled, err)
-				} else if err == nil && !testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected not to clear quota but succeeded", seq, testcase.path, enabled)
-				}
-			}
-		case "GetInodes":
-			_, err := GetInodes(testcase.path)
-			if !enabled {
-				if err == nil {
-					t.Errorf("Case %v (%s, %v) GetInodes: supports quotas but shouldn't", seq, testcase.path, enabled)
-				}
-			} else {
-				if err != nil && testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected to clear quota but failed %v", seq, testcase.path, enabled, err)
-				} else if err == nil && !testcase.expectsSetQuota {
-					fail = true
-					t.Errorf("Case %v (%s, %v) expected not to clear quota but succeeded", seq, testcase.path, enabled)
-				}
-			}
-		default:
-			t.Errorf("Case %v (%s, %v) unknown operation %s", seq, testcase.path, enabled, testcase.op)
+		if enabled {
+			fail = runCaseEnabled(t, testcase, seq)
+		} else {
+			fail = runCaseDisabled(t, testcase, seq)
 		}
+
 		compareProjectsFiles(t, testcase, projectsFile, projidFile, enabled)
 		if len(podQuotaMap) != expectedPodQuotaCount {
 			fail = true
@@ -873,7 +753,10 @@ func testAddRemoveQuotas(t *testing.T, enabled bool) {
 	os.Remove(projidFile)
 }
 
-func TestAddRemoveQuotas(t *testing.T) {
+func TestAddRemoveQuotasEnabled(t *testing.T) {
 	testAddRemoveQuotas(t, true)
+}
+
+func TestAddRemoveQuotasDisabled(t *testing.T) {
 	testAddRemoveQuotas(t, false)
 }

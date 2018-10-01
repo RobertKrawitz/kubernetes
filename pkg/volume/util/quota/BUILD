@@ -33,8 +33,10 @@ go_test(
     embed = [":go_default_library"],
     deps = select({
         "@io_bazel_rules_go//go/platform:linux": [
+            "//pkg/features:go_default_library",
             "//pkg/util/mount:go_default_library",
             "//pkg/volume/util/quota/common:go_default_library",
+            "//staging/src/k8s.io/apiserver/pkg/util/feature:go_default_library",
         ],
         "//conditions:default": [],
     }),

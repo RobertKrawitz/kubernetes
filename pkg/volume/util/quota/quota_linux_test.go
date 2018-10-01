@@ -21,6 +21,8 @@ package quota
 import (
 	"fmt"
 	"io/ioutil"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/volume/util/quota/common"
 	"os"
@@ -364,11 +366,13 @@ func dummyQuotaTest() mount.Interface {
 }
 
 func dummySetFSInfo(path string) {
-	for _, mount := range dummyMountPoints {
-		if strings.HasPrefix(path, mount.Path) {
-			mountpointMap[path] = mount.Path
-			backingDevMap[path] = mount.Device
-			return
+	if enabledQuotasForMonitoring() {
+		for _, mount := range dummyMountPoints {
+			if strings.HasPrefix(path, mount.Path) {
+				mountpointMap[path] = mount.Path
+				backingDevMap[path] = mount.Device
+				return
+			}
 		}
 	}
 }
@@ -607,14 +611,18 @@ var quotaTestCases = []quotaTestCase{
 	},
 }
 
-func compareProjectsFiles(t *testing.T, testcase quotaTestCase, projectsFile string, projidFile string) {
+func compareProjectsFiles(t *testing.T, testcase quotaTestCase, projectsFile string, projidFile string, enabled bool) {
 	bytes, err := ioutil.ReadFile(projectsFile)
 	if err != nil {
 		t.Error(err.Error())
 	} else {
 		s := string(bytes)
-		if s != projectsHeader+testcase.expectedProjects {
-			t.Errorf("Case %v /etc/projects miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, projectsHeader+testcase.expectedProjects, s)
+		p := projectsHeader
+		if enabled {
+			p += testcase.expectedProjects
+		}
+		if s != p {
+			t.Errorf("Case %v /etc/projects miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, p, s)
 		}
 	}
 	bytes, err = ioutil.ReadFile(projidFile)
@@ -622,13 +630,28 @@ func compareProjectsFiles(t *testing.T, testcase quotaTestCase, projectsFile str
 		t.Error(err.Error())
 	} else {
 		s := string(bytes)
-		if s != projidHeader+testcase.expectedProjid {
-			t.Errorf("Case %v /etc/projid miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, projidHeader+testcase.expectedProjid, s)
+		p := projidHeader
+		if enabled {
+			p += testcase.expectedProjid
+		}
+		if s != p {
+			t.Errorf("Case %v /etc/projid miscompare: expected\n`%s`\ngot\n`%s`\n", testcase.path, p, s)
 		}
 	}
 }
 
-func TestAddRemoveQuotas(t *testing.T) {
+func setFeature(feature utilfeature.Feature, value bool) error {
+	v := "true"
+	if !value {
+		v = "false"
+	}
+	return utilfeature.DefaultFeatureGate.Set(fmt.Sprintf("%s=%s", string(feature), v))
+}
+
+func testAddRemoveQuotas(t *testing.T, enabled bool) {
+	if err := setFeature(features.FSQuotaForLSCIMonitoring, enabled); err != nil {
+		t.Errorf("Unable to enable LSCI monitoring: %v", err)
+	}
 	tmpProjectsFile, err := ioutil.TempFile("", "projects")
 	if err == nil {
 		_, err = tmpProjectsFile.WriteString(projectsHeader)
@@ -651,6 +674,45 @@ func TestAddRemoveQuotas(t *testing.T) {
 		&VolumeProvider1{},
 		&VolumeProvider2{},
 	}
+	for k := range podQuotaMap {
+		delete(podQuotaMap, k)
+	}
+	for k := range dirQuotaMap {
+		delete(dirQuotaMap, k)
+	}
+	for k := range quotaPodMap {
+		delete(quotaPodMap, k)
+	}
+	for k := range dirPodMap {
+		delete(dirPodMap, k)
+	}
+	for k := range devApplierMap {
+		delete(devApplierMap, k)
+	}
+	for k := range dirApplierMap {
+		delete(dirApplierMap, k)
+	}
+	for k := range podDirCountMap {
+		delete(podDirCountMap, k)
+	}
+	for k := range quotaSizeMap {
+		delete(quotaSizeMap, k)
+	}
+	for k := range supportsQuotasMap {
+		delete(supportsQuotasMap, k)
+	}
+	for k := range backingDevMap {
+		delete(backingDevMap, k)
+	}
+	for k := range mountpointMap {
+		delete(mountpointMap, k)
+	}
+	for k := range testIDQuotaMap {
+		delete(testIDQuotaMap, k)
+	}
+	for k := range testQuotaIDMap {
+		delete(testQuotaIDMap, k)
+	}
 	expectedPodQuotaCount := 0
 	expectedDirQuotaCount := 0
 	expectedQuotaPodCount := 0
@@ -663,113 +725,145 @@ func TestAddRemoveQuotas(t *testing.T) {
 	expectedBackingDevCount := 0
 	expectedMountpointCount := 0
 	for seq, testcase := range quotaTestCases {
-		expectedPodQuotaCount += testcase.deltaExpectedPodQuotaCount
-		expectedDirQuotaCount += testcase.deltaExpectedDirQuotaCount
-		expectedQuotaPodCount += testcase.deltaExpectedQuotaPodCount
-		expectedDirPodCount += testcase.deltaExpectedDirPodCount
-		expectedDevApplierCount += testcase.deltaExpectedDevApplierCount
-		expectedDirApplierCount += testcase.deltaExpectedDirApplierCount
-		expectedPodDirCountCount += testcase.deltaExpectedPodDirCountCount
-		expectedQuotaSizeCount += testcase.deltaExpectedQuotaSizeCount
-		expectedSupportsQuotasCount += testcase.deltaExpectedSupportsQuotasCount
-		expectedBackingDevCount += testcase.deltaExpectedBackingDevCount
-		expectedMountpointCount += testcase.deltaExpectedMountpointCount
+		if enabled {
+			expectedPodQuotaCount += testcase.deltaExpectedPodQuotaCount
+			expectedDirQuotaCount += testcase.deltaExpectedDirQuotaCount
+			expectedQuotaPodCount += testcase.deltaExpectedQuotaPodCount
+			expectedDirPodCount += testcase.deltaExpectedDirPodCount
+			expectedDevApplierCount += testcase.deltaExpectedDevApplierCount
+			expectedDirApplierCount += testcase.deltaExpectedDirApplierCount
+			expectedPodDirCountCount += testcase.deltaExpectedPodDirCountCount
+			expectedQuotaSizeCount += testcase.deltaExpectedQuotaSizeCount
+			expectedSupportsQuotasCount += testcase.deltaExpectedSupportsQuotasCount
+			expectedBackingDevCount += testcase.deltaExpectedBackingDevCount
+			expectedMountpointCount += testcase.deltaExpectedMountpointCount
+		}
 		var err error
 		fail := false
 		switch testcase.op {
 		case "Supports":
 			supports, err := fakeSupportsQuotas(testcase.path)
-			if err != nil {
-				fail = true
-				t.Errorf("Case %v (%s) Got error in fakeSupportsQuotas: %v", seq, testcase.path, err)
-			}
-			if supports != testcase.supportsQuota {
-				fail = true
-				t.Errorf("Case %v (%s) fakeSupportsQuotas got %v, expect %v", seq, testcase.path, supports, testcase.supportsQuota)
+			if !enabled {
+				if supports {
+					t.Errorf("Case %v (%s, %v) supports quotas but shouldn't", seq, testcase.path, enabled)
+				}
+			} else {
+				if err != nil {
+					fail = true
+					t.Errorf("Case %v (%s, %v) Got error in fakeSupportsQuotas: %v", seq, testcase.path, enabled, err)
+				}
+				if supports != testcase.supportsQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) fakeSupportsQuotas got %v, expect %v", seq, testcase.path, enabled, supports, testcase.supportsQuota)
+				}
 			}
 		case "Set":
 			err = fakeAssignQuota(testcase.path, testcase.poduid, testcase.bytes)
-			if err != nil && testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected to set quota but failed %v", seq, testcase.path, err)
-			} else if err == nil && !testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected not to set quota but succeeded", seq, testcase.path)
+			if !enabled {
+				if err == nil {
+					t.Errorf("Case %v (%s, %v) set: supports quotas but shouldn't", seq, testcase.path, enabled)
+				}
+			} else {
+				if err != nil && testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected to set quota but failed %v", seq, testcase.path, enabled, err)
+				} else if err == nil && !testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected not to set quota but succeeded", seq, testcase.path, enabled)
+				}
 			}
 		case "Clear":
 			err = fakeClearQuota(testcase.path)
-			if err != nil && testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected to clear quota but failed %v", seq, testcase.path, err)
-			} else if err == nil && !testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected not to clear quota but succeeded", seq, testcase.path)
+			if !enabled {
+				if err == nil {
+					t.Errorf("Case %v (%s, %v) clear: supports quotas but shouldn't", seq, testcase.path, enabled)
+				}
+			} else {
+				if err != nil && testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected to clear quota but failed %v", seq, testcase.path, enabled, err)
+				} else if err == nil && !testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected not to clear quota but succeeded", seq, testcase.path, enabled)
+				}
 			}
 		case "GetConsumption":
 			_, err := GetConsumption(testcase.path)
-			if err != nil && testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected to clear quota but failed %v", seq, testcase.path, err)
-			} else if err == nil && !testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected not to clear quota but succeeded", seq, testcase.path)
+			if !enabled {
+				if err == nil {
+					t.Errorf("Case %v (%s, %v) GetConsumption: supports quotas but shouldn't", seq, testcase.path, enabled)
+				}
+			} else {
+				if err != nil && testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected to clear quota but failed %v", seq, testcase.path, enabled, err)
+				} else if err == nil && !testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected not to clear quota but succeeded", seq, testcase.path, enabled)
+				}
 			}
 		case "GetInodes":
 			_, err := GetInodes(testcase.path)
-			if err != nil && testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected to clear quota but failed %v", seq, testcase.path, err)
-			} else if err == nil && !testcase.expectsSetQuota {
-				fail = true
-				t.Errorf("Case %v (%s) expected not to clear quota but succeeded", seq, testcase.path)
+			if !enabled {
+				if err == nil {
+					t.Errorf("Case %v (%s, %v) GetInodes: supports quotas but shouldn't", seq, testcase.path, enabled)
+				}
+			} else {
+				if err != nil && testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected to clear quota but failed %v", seq, testcase.path, enabled, err)
+				} else if err == nil && !testcase.expectsSetQuota {
+					fail = true
+					t.Errorf("Case %v (%s, %v) expected not to clear quota but succeeded", seq, testcase.path, enabled)
+				}
 			}
 		default:
-			t.Errorf("Case %v (%s) unknown operation %s", seq, testcase.path, testcase.op)
+			t.Errorf("Case %v (%s, %v) unknown operation %s", seq, testcase.path, enabled, testcase.op)
 		}
-		compareProjectsFiles(t, testcase, projectsFile, projidFile)
+		compareProjectsFiles(t, testcase, projectsFile, projidFile, enabled)
 		if len(podQuotaMap) != expectedPodQuotaCount {
 			fail = true
-			t.Errorf("Case %v (%s) podQuotaCount mismatch: got %v, expect %v", seq, testcase.path, len(podQuotaMap), expectedPodQuotaCount)
+			t.Errorf("Case %v (%s, %v) podQuotaCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(podQuotaMap), expectedPodQuotaCount)
 		}
 		if len(dirQuotaMap) != expectedDirQuotaCount {
 			fail = true
-			t.Errorf("Case %v (%s) dirQuotaCount mismatch: got %v, expect %v", seq, testcase.path, len(dirQuotaMap), expectedDirQuotaCount)
+			t.Errorf("Case %v (%s, %v) dirQuotaCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(dirQuotaMap), expectedDirQuotaCount)
 		}
 		if len(quotaPodMap) != expectedQuotaPodCount {
 			fail = true
-			t.Errorf("Case %v (%s) quotaPodCount mismatch: got %v, expect %v", seq, testcase.path, len(quotaPodMap), expectedQuotaPodCount)
+			t.Errorf("Case %v (%s, %v) quotaPodCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(quotaPodMap), expectedQuotaPodCount)
 		}
 		if len(dirPodMap) != expectedDirPodCount {
 			fail = true
-			t.Errorf("Case %v (%s) dirPodCount mismatch: got %v, expect %v", seq, testcase.path, len(dirPodMap), expectedDirPodCount)
+			t.Errorf("Case %v (%s, %v) dirPodCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(dirPodMap), expectedDirPodCount)
 		}
 		if len(devApplierMap) != expectedDevApplierCount {
 			fail = true
-			t.Errorf("Case %v (%s) devApplierCount mismatch: got %v, expect %v", seq, testcase.path, len(devApplierMap), expectedDevApplierCount)
+			t.Errorf("Case %v (%s, %v) devApplierCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(devApplierMap), expectedDevApplierCount)
 		}
 		if len(dirApplierMap) != expectedDirApplierCount {
 			fail = true
-			t.Errorf("Case %v (%s) dirApplierCount mismatch: got %v, expect %v", seq, testcase.path, len(dirApplierMap), expectedDirApplierCount)
+			t.Errorf("Case %v (%s, %v) dirApplierCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(dirApplierMap), expectedDirApplierCount)
 		}
 		if len(podDirCountMap) != expectedPodDirCountCount {
 			fail = true
-			t.Errorf("Case %v (%s) podDirCountCount mismatch: got %v, expect %v", seq, testcase.path, len(podDirCountMap), expectedPodDirCountCount)
+			t.Errorf("Case %v (%s, %v) podDirCountCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(podDirCountMap), expectedPodDirCountCount)
 		}
 		if len(quotaSizeMap) != expectedQuotaSizeCount {
 			fail = true
-			t.Errorf("Case %v (%s) quotaSizeCount mismatch: got %v, expect %v", seq, testcase.path, len(quotaSizeMap), expectedQuotaSizeCount)
+			t.Errorf("Case %v (%s, %v) quotaSizeCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(quotaSizeMap), expectedQuotaSizeCount)
 		}
 		if len(supportsQuotasMap) != expectedSupportsQuotasCount {
 			fail = true
-			t.Errorf("Case %v (%s) supportsQuotasCount mismatch: got %v, expect %v", seq, testcase.path, len(supportsQuotasMap), expectedSupportsQuotasCount)
+			t.Errorf("Case %v (%s, %v) supportsQuotasCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(supportsQuotasMap), expectedSupportsQuotasCount)
 		}
 		if len(backingDevMap) != expectedBackingDevCount {
 			fail = true
-			t.Errorf("Case %v (%s) BackingDevCount mismatch: got %v, expect %v", seq, testcase.path, len(backingDevMap), expectedBackingDevCount)
+			t.Errorf("Case %v (%s, %v) BackingDevCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(backingDevMap), expectedBackingDevCount)
 		}
 		if len(mountpointMap) != expectedMountpointCount {
 			fail = true
-			t.Errorf("Case %v (%s) MountpointCount mismatch: got %v, expect %v", seq, testcase.path, len(mountpointMap), expectedMountpointCount)
+			t.Errorf("Case %v (%s, %v) MountpointCount mismatch: got %v, expect %v", seq, testcase.path, enabled, len(mountpointMap), expectedMountpointCount)
 		}
 		if fail {
 			logAllMaps(fmt.Sprintf("%v %s", seq, testcase.path))
@@ -777,4 +871,9 @@ func TestAddRemoveQuotas(t *testing.T) {
 	}
 	os.Remove(projectsFile)
 	os.Remove(projidFile)
+}
+
+func TestAddRemoveQuotas(t *testing.T) {
+	testAddRemoveQuotas(t, true)
+	testAddRemoveQuotas(t, false)
 }

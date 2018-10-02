@@ -88,7 +88,7 @@ func (v xfsVolumeQuota) GetQuotaOnDir(path string) (common.QuotaID, error) {
 // quota larger than anything the user may possibly create)
 func (v xfsVolumeQuota) SetQuotaOnDir(path string, id common.QuotaID, bytes int64) error {
 	klog.V(3).Infof("xfsSetQuotaOn %s ID %v bytes %v", path, id, bytes)
-	if bytes < 0 {
+	if bytes < 0 || bytes > maxQuota {
 		bytes = maxQuota
 	}
 

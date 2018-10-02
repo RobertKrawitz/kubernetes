@@ -63,14 +63,13 @@ type VolumeProvider struct {
 // can be applied to directories?
 func (*VolumeProvider) GetQuotaApplier(mountpoint string, backingDev string) common.LinuxVolumeQuotaApplier {
 	if common.IsFilesystemOfType(mountpoint, backingDev, linuxExtfsMagic) {
-		return extfsVolumeQuota{backingDev, mountpoint}
+		return extfsVolumeQuota{backingDev}
 	}
 	return nil
 }
 
 type extfsVolumeQuota struct {
 	backingDev string
-	mountpoint string
 }
 
 // GetQuotaOnDir -- get the quota ID that applies to this directory.

@@ -394,19 +394,11 @@ const (
 	KubeletPodResources utilfeature.Feature = "KubeletPodResources"
 
 	// owner: @RobertKrawitz
-	// alpha: v1.13
+	// alpha: v1.14
 	//
 	// Allow use of filesystems for ephemeral storage monitoring.
 	// Only applies if LocalStorageCapacityIsolation is set.
 	FSQuotaForLSCIMonitoring = "FSQuotaForLSCIMonitoring"
-
-	// owner: @RobertKrawitz
-	// alpha: v1.13
-	//
-	// Allow use of filesystems for ephemeral storage enforcement
-	// Only applies if FSQuotaForLSCIMonitoring and
-	// LocalStorageCapacityIsolation are set.
-	FSQuotaForLSCIEnforcement = "FSQuotaForLSCIEnforcement"
 )
 
 func init() {
@@ -474,8 +466,8 @@ var defaultKubernetesFeatureGates = map[utilfeature.Feature]utilfeature.FeatureS
 	VolumeSnapshotDataSource:                    {Default: false, PreRelease: utilfeature.Alpha},
 	ProcMountType:                               {Default: false, PreRelease: utilfeature.Alpha},
 	TTLAfterFinished:                            {Default: false, PreRelease: utilfeature.Alpha},
-==== BASE ====
-==== BASE ====
+	KubeletPodResources:                         {Default: false, PreRelease: utilfeature.Alpha},
+	FSQuotaForLSCIMonitoring:                    {Default: false, PreRelease: utilfeature.Alpha},
 
 	// inherited features from generic apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:

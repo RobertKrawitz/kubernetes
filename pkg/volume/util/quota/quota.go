@@ -45,8 +45,3 @@ type Interface interface {
 func enabledQuotasForMonitoring() bool {
 	return utilfeature.DefaultFeatureGate.Enabled(features.FSQuotaForLSCIMonitoring)
 }
-
-func enabledQuotasForEnforcement() bool {
-	return utilfeature.DefaultFeatureGate.Enabled(features.FSQuotaForLSCIEnforcement) &&
-		utilfeature.DefaultFeatureGate.Enabled(features.FSQuotaForLSCIMonitoring)
-}

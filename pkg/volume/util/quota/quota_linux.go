@@ -334,7 +334,9 @@ func AssignQuota(m mount.Interface, path string, poduid string, bytes int64) err
 			klog.V(3).Infof("Attempt to reassign quota %v to %v", oid, id)
 			return fmt.Errorf("Attempt to reassign quota %v to %v", oid, id)
 		}
-		if bytes > 0 && !enabledQuotasForEnforcement() {
+		// When enforcing quotas are enabled, we'll condition this
+		// on their being disabled also.
+		if bytes > 0 {
 			bytes = -1
 		}
 		if err = setQuotaOnDir(path, id, bytes); err == nil {

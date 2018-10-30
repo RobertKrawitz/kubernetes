@@ -398,8 +398,8 @@ func TestMapUnmap(t *testing.T) {
 	}
 }
 
-func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, mounterArgs.FsGroup int64) error {
-	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false), pod, volume.VolumeOptions{})
+func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, fsGroup int64) error {
+	mounter, err := plug.NewMounter(getTestVolume(false, tmpDir, false, nil), pod, volume.VolumeOptions{})
 	if err != nil {
 		return err
 	}
@@ -414,7 +414,7 @@ func testFSGroupMount(plug volume.VolumePlugin, pod *v1.Pod, tmpDir string, moun
 	}
 
 	var mounterArgs volume.MounterArgs
-	mounterArgs.FsGroup = &FsGroup
+	mounterArgs.FsGroup = &fsGroup
 	if err := mounter.SetUp(mounterArgs); err != nil {
 		return err
 	}
@@ -520,7 +520,7 @@ func TestMountOptions(t *testing.T) {
 	fakeMounter := &mount.FakeMounter{}
 	mounter.(*localVolumeMounter).mounter = fakeMounter
 
-	if err := mounter.SetUp(nil); err != nil {
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 	mountOptions := fakeMounter.MountPoints[0].Opts

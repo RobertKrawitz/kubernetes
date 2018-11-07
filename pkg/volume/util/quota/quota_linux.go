@@ -19,15 +19,11 @@ limitations under the License.
 package quota
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
 	"sync"
 
-	"k8s.io/klog"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/volume/util/quota/common"
 	"k8s.io/kubernetes/pkg/volume/util/quota/extfs"
@@ -64,8 +60,6 @@ var quotaLock sync.RWMutex
 var supportsQuotasMap = make(map[string]bool)
 var supportsQuotasLock sync.RWMutex
 
-var mountParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([^ ]*)[ \t]*([^ ]*)[ \t]*([^ ]*)") // Ignore options etc.
-
 // Directory -> backingDev
 var backingDevMap = make(map[string]string)
 var backingDevLock sync.RWMutex
@@ -73,81 +67,15 @@ var backingDevLock sync.RWMutex
 var mountpointMap = make(map[string]string)
 var mountpointLock sync.RWMutex
 
-var mountsFile = "/proc/self/mounts"
-
 var providers = []common.LinuxVolumeQuotaProvider{
 	&extfs.VolumeProvider{},
 	&xfs.VolumeProvider{},
-}
-
-// Separate the innards for ease of testing
-func detectBackingDevInternal(mountpoint string, mounts string) (string, error) {
-	file, err := os.Open(mounts)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		match := mountParseRegexp.FindStringSubmatch(scanner.Text())
-		if match != nil {
-			device := match[1]
-			mount := match[2]
-			if mount == mountpoint {
-				return device, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("couldn't find backing device for %s", mountpoint)
-}
-
-// detectBackingDev assumes that the mount point provided is valid
-func detectBackingDev(_ mount.Interface, mountpoint string) (string, error) {
-	return detectBackingDevInternal(mountpoint, mountsFile)
 }
 
 func clearBackingDev(path string) {
 	backingDevLock.Lock()
 	defer backingDevLock.Unlock()
 	delete(backingDevMap, path)
-}
-
-// Assumes that the path has been fully canonicalized
-// Breaking this up helps with testing
-func detectMountpointInternal(m mount.Interface, path string) (string, error) {
-	for path != "" && path != "/" {
-		// per pkg/util/mount/mount_linux this detects all but
-		// a bind mount from one part of a mount to another.
-		// For our purposes that's fine; we simply want the "true"
-		// mount point
-		//
-		// IsNotMountPoint proved much more troublesome; it actually
-		// scans the mounts, and when a lot of mount/unmount
-		// activity takes place, it is not able to get a consistent
-		// view of /proc/self/mounts, causing it to time out and
-		// report incorrectly.
-		isNotMount, err := m.IsLikelyNotMountPoint(path)
-		if err != nil {
-			return "/", err
-		}
-		if !isNotMount {
-			return path, nil
-		}
-		path = filepath.Dir(path)
-	}
-	return "/", nil
-}
-
-func detectMountpoint(m mount.Interface, path string) (string, error) {
-	xpath, err := filepath.Abs(path)
-	if err == nil {
-		if xpath, err = filepath.EvalSymlinks(xpath); err == nil {
-			if xpath, err = detectMountpointInternal(m, xpath); err == nil {
-				return xpath, nil
-			}
-		}
-	}
-	return "/", err
 }
 
 func clearMountpoint(path string) {
@@ -170,7 +98,7 @@ func getFSInfo(m mount.Interface, path string) (string, string, error) {
 
 	mountpoint, okMountpoint := mountpointMap[path]
 	if !okMountpoint {
-		mountpoint, err = detectMountpoint(m, path)
+		mountpoint, err = common.DetectMountpoint(m, path)
 		klog.V(3).Infof("Mountpoint %s -> %s (%v)", path, mountpoint, err)
 		if err != nil {
 			return "", "", err
@@ -179,7 +107,7 @@ func getFSInfo(m mount.Interface, path string) (string, string, error) {
 
 	backingDev, okBackingDev := backingDevMap[path]
 	if !okBackingDev {
-		backingDev, err = detectBackingDev(m, mountpoint)
+		backingDev, err = common.DetectBackingDev(m, mountpoint)
 		klog.V(3).Infof("Backing dev %s -> %s (%v)", path, backingDev, err)
 		if err != nil {
 			return "", "", err
@@ -218,11 +146,19 @@ func setQuotaOnDir(path string, id common.QuotaID, bytes int64) error {
 }
 
 func getQuotaOnDir(m mount.Interface, path string) (common.QuotaID, error) {
+	// No convenient way to do this via xfs_quota
 	_, _, err := getFSInfo(m, path)
 	if err != nil {
 		return common.BadQuotaID, err
 	}
-	return getApplier(path).GetQuotaOnDir(path)
+	ID, err := getApplier(path).GetQuotaOnDir(path)
+	if ID != common.UnknownQuotaID {
+		return ID, err
+	}
+	ID, err = getProjectIDForDirectory(path)
+	// If /etc/projects doesn't have an entry or similar,
+	// simply report no quota ID.
+	return ID, nil
 }
 
 func clearQuotaOnDir(m mount.Interface, path string) error {
@@ -252,6 +188,9 @@ func clearQuotaOnDir(m mount.Interface, path string) error {
 		}
 		return err1
 	}
+	// If we use only files (i. e. no syscalls to detect quotas), we need
+	// to clear out the records that were introduced by the SupportsQuotas probe.
+	clearFSInfo(path)
 	klog.V(3).Infof("clearQuotaOnDir fails %v", err)
 	// If we couldn't get a quota, that's fine -- there may
 	// never have been one, and we have no way to know otherwise

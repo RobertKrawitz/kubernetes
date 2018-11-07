@@ -74,13 +74,13 @@ func dummyFakeMount1() mount.Interface {
 				Opts:   []string{"rw", "relatime"},
 			},
 			{
-				Device: "dev/mapper/fedora-root",
+				Device: "/dev/mapper/fedora-root",
 				Path:   "/",
 				Type:   "ext4",
 				Opts:   []string{"rw", "relatime"},
 			},
 			{
-				Device: "dev/mapper/fedora-home",
+				Device: "/dev/mapper/fedora-home",
 				Path:   "/home",
 				Type:   "ext4",
 				Opts:   []string{"rw", "relatime"},
@@ -119,7 +119,7 @@ func testBackingDev1(testcase backingDevTest) error {
 		return err
 	}
 
-	backingDev, err := detectBackingDevInternal(testcase.path, tmpfile.Name())
+	backingDev, err := common.DetectBackingDevInternal(testcase.path, tmpfile.Name())
 	if err != nil {
 		if testcase.expectFailure {
 			return nil
@@ -210,7 +210,7 @@ func TestDetectMountPoint(t *testing.T) {
 		},
 	}
 	for name, testcase := range testcasesMount {
-		mountpoint, err := detectMountpointInternal(testcase.mounter, testcase.path)
+		mountpoint, err := common.DetectMountpointInternal(testcase.mounter, testcase.path)
 		if err == nil && testcase.expectFailure {
 			t.Errorf("Case %s expected failure, but succeeded, returning mountpoint %s", name, mountpoint)
 		} else if err != nil {
@@ -276,52 +276,52 @@ type testVolumeQuota struct {
 }
 
 func logAllMaps(where string) {
-	fmt.Sprintf("Maps at %s", where)
-	fmt.Sprintf("    Map podQuotaMap contents:")
+	fmt.Printf("Maps at %s\n", where)
+	fmt.Printf("    Map podQuotaMap contents:\n")
 	for key, val := range podQuotaMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map dirQuotaMap contents:")
+	fmt.Printf("    Map dirQuotaMap contents:\n")
 	for key, val := range dirQuotaMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map quotaPodMap contents:")
+	fmt.Printf("    Map quotaPodMap contents:\n")
 	for key, val := range quotaPodMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map dirPodMap contents:")
+	fmt.Printf("    Map dirPodMap contents:\n")
 	for key, val := range dirPodMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map devApplierMap contents:")
+	fmt.Printf("    Map devApplierMap contents:\n")
 	for key, val := range devApplierMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map dirApplierMap contents:")
+	fmt.Printf("    Map dirApplierMap contents:\n")
 	for key, val := range dirApplierMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map podDirCountMap contents:")
+	fmt.Printf("    Map podDirCountMap contents:\n")
 	for key, val := range podDirCountMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map quotaSizeMap contents:")
+	fmt.Printf("    Map quotaSizeMap contents:\n")
 	for key, val := range quotaSizeMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map supportsQuotasMap contents:")
+	fmt.Printf("    Map supportsQuotasMap contents:\n")
 	for key, val := range supportsQuotasMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map backingDevMap contents:")
+	fmt.Printf("    Map backingDevMap contents:\n")
 	for key, val := range backingDevMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("    Map mountpointMap contents:")
+	fmt.Printf("    Map mountpointMap contents:\n")
 	for key, val := range mountpointMap {
-		fmt.Sprintf("        %v -> %v", key, val)
+		fmt.Printf("        %v -> %v\n", key, val)
 	}
-	fmt.Sprintf("End maps %s", where)
+	fmt.Printf("End maps %s\n", where)
 }
 
 var testIDQuotaMap = make(map[common.QuotaID]string)
@@ -341,17 +341,22 @@ func (*VolumeProvider2) GetQuotaApplier(mountpoint string, backingDev string) co
 	return nil
 }
 
-func (v testVolumeQuota) SetQuotaOnDir(dir string, id common.QuotaID, _ int64) error {
-	odir, ok := testIDQuotaMap[id]
-	if ok && dir != odir {
-		return fmt.Errorf("ID %v is already in use", id)
+func (v testVolumeQuota) SetQuotaOnDir(dir string, id common.QuotaID, bytes int64) error {
+	if bytes == 0 {
+		delete(testIDQuotaMap, id)
+		delete(testQuotaIDMap, dir)
+	} else {
+		odir, ok := testIDQuotaMap[id]
+		if ok && dir != odir {
+			return fmt.Errorf("ID %v is already in use", id)
+		}
+		oid, ok := testQuotaIDMap[dir]
+		if ok && id != oid {
+			return fmt.Errorf("Directory %s already has a quota applied", dir)
+		}
+		testQuotaIDMap[dir] = id
+		testIDQuotaMap[id] = dir
 	}
-	oid, ok := testQuotaIDMap[dir]
-	if ok && id != oid {
-		return fmt.Errorf("Directory %s already has a quota applied", dir)
-	}
-	testQuotaIDMap[dir] = id
-	testIDQuotaMap[id] = dir
 	return nil
 }
 
@@ -492,7 +497,7 @@ var quotaTestCases = []quotaTestCase{
 	},
 	{
 		"/quota1/a", "", 1024, "Clear", projects5, projid5,
-		true, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	},
 	{
 		"/quota2/b", "", 1024, "Clear", "", "",

@@ -25,12 +25,12 @@ import (
 	"sync"
 
 	"k8s.io/api/core/v1"
+	apiv1resource "k8s.io/kubernetes/pkg/api/v1/resource"
+	limits "k8s.io/kubernetes/pkg/kubelet/eviction"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/util"
 	"k8s.io/kubernetes/pkg/volume/util/operationexecutor"
 	"k8s.io/kubernetes/pkg/volume/util/types"
-	apiv1resource "k8s.io/kubernetes/pkg/api/v1/resource"
-	limits "k8s.io/kubernetes/pkg/kubelet/eviction"
 )
 
 // DesiredStateOfWorld defines a set of thread-safe operations for the kubelet
@@ -251,7 +251,7 @@ func (dsw *desiredStateOfWorld) AddPodToVolume(
 			pluginIsDeviceMountable: deviceMountable,
 			volumeGidValue:          volumeGidValue,
 			reportedInUse:           false,
-			desiredSizeLimit:   sizeLimit,
+			desiredSizeLimit:        sizeLimit,
 		}
 	}
 

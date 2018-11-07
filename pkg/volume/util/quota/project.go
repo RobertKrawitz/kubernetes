@@ -36,8 +36,8 @@ import (
 var projectsFile = "/etc/projects"
 var projidFile = "/etc/projid"
 
-var projectsParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([[:digit:]]+):(.*)$")
-var projidParseRegexp *regexp.Regexp = regexp.MustCompilePOSIX("^([^#][^:]*):([[:digit:]]+)$")
+var projectsParseRegexp = regexp.MustCompilePOSIX("^([[:digit:]]+):(.*)$")
+var projidParseRegexp = regexp.MustCompilePOSIX("^([^#][^:]*):([[:digit:]]+)$")
 
 var quotaIDLock sync.RWMutex
 
@@ -309,6 +309,24 @@ func writeProjectFiles(fProjects *os.File, fProjid *os.File, writeProjid bool, l
 	}
 	klog.V(3).Infof("Unable to write project files: %v", err)
 	return err
+}
+
+func getProjectIDForDirectory(path string) (common.QuotaID, error) {
+	quotaIDLock.Lock()
+	defer quotaIDLock.Unlock()
+	fProjects, fProjid, err := openAndLockProjectFiles()
+	if err == nil {
+		defer closeProjectFiles(fProjects, fProjid)
+		list := readProjectFiles(fProjects, fProjid)
+		for _, proj := range list.projects {
+			if proj.data == path {
+				return proj.id, nil
+			}
+		}
+		err = fmt.Errorf("Cannot find quota ID for path %s", path)
+	}
+	klog.V(3).Infof("getProjectIDForDirectory %s failed %v", path, err)
+	return common.BadQuotaID, err
 }
 
 func createProjectID(path string, ID common.QuotaID) (common.QuotaID, error) {

@@ -2,8 +2,8 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "go_default_library",
-    srcs = ["quota_extfs.go"],
-    importpath = "k8s.io/kubernetes/pkg/volume/util/quota/extfs",
+    srcs = ["quota_xfs.go"],
+    importpath = "k8s.io/kubernetes/pkg/volume/util/quota/xfs",
     visibility = ["//visibility:public"],
     deps = select({
         "@io_bazel_rules_go//go/platform:linux": [
